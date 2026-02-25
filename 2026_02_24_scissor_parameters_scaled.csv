@@ -1,0 +1,9 @@
+Name,Unit,Expression,Value,Comments,Favorite
+Hole_Diameter,mm,2.00 mm,2.00,,false
+Plate_Thickness,mm,5.0 mm,5.0,,false
+Member_Width,mm,Plate_Thickness,5.0,,false
+Long_H2H,mm,155.0 mm,155.0,,false
+Short_H2H,mm,150.0 mm,150.0,,false
+Offset_H2H,mm,44.4 mm,44.4,,false
+Hinge_Par,mm,5.0 mm,5.0,,false
+Hinge_Perp,mm,8.00 mm,8.00,,false
