@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>In-Space Power Demand by Actor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #000000;
+    --surface: #111827;
+    --border: rgba(255,255,255,0.07);
+    --text: #f0f4ff;
+    --muted: #f0f4ff;
+    --spacex: #7c9eff;
+    --starcloud: #34d399;
+    --axiom: #f472b6;
+    --google: #fb923c;
+    --accent: #fb923c;
+  }
+
+  body {
+    background: var(--bg);
+    font-family: 'Inter', sans-serif;
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 32px;
+  }
+
+  .slide {
+    width: 1200px;
+    max-width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 48px 56px 40px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .slide::before {
+    content: '';
+    position: absolute;
+    top: -120px; right: -120px;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(251,146,60,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  /* Header hidden */
+  .header { display: none; }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 28px;
+    margin: 20px 0 32px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+  .legend-dot {
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  /* Chart area */
+  .chart-area {
+    display: flex;
+    gap: 0;
+    position: relative;
+  }
+
+  .y-axis {
+    display: flex;
+    flex-direction: column-reverse;
+    justify-content: space-between;
+    padding-bottom: 36px;
+    width: 72px;
+    flex-shrink: 0;
+  }
+  .y-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 18px;
+    color: #ffffff;
+    text-align: right;
+    padding-right: 12px;
+    line-height: 1;
+  }
+
+  .chart-inner {
+    flex: 1;
+    position: relative;
+  }
+
+  /* Grid lines */
+  .grid-lines {
+    position: absolute;
+    inset: 0;
+    bottom: 36px;
+    display: flex;
+    flex-direction: column-reverse;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .grid-line {
+    width: 100%;
+    height: 1px;
+    background: rgba(255,255,255,0.05);
+  }
+  .grid-line.zero { background: rgba(255,255,255,0.12); }
+
+  /* Bars */
+  .bars-container {
+    display: flex;
+    align-items: flex-end;
+    height: 380px;
+    gap: 8px;
+    padding: 0 4px;
+    position: relative;
+  }
+
+  .bar-group {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 100%;
+    position: relative;
+    cursor: default;
+  }
+
+  .stacked-bar {
+    width: 100%;
+    max-width: 52px;
+    display: flex;
+    flex-direction: column-reverse;
+    border-radius: 6px 6px 0 0;
+    overflow: hidden;
+    transition: transform 0.2s ease, filter 0.2s ease;
+  }
+  .stacked-bar:hover {
+    transform: scaleX(1.06);
+    filter: brightness(1.15);
+  }
+
+  .bar-seg {
+    width: 100%;
+    transition: height 0.8s cubic-bezier(0.16,1,0.3,1);
+  }
+  .seg-spacex  { background: var(--spacex); }
+  .seg-starcloud { background: var(--starcloud); }
+  .seg-axiom   { background: var(--axiom); }
+  .seg-google  { background: var(--google); }
+
+  /* Value label above bar */
+  .bar-value {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 6px;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.3s, transform 0.3s;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .bar-group:hover .bar-value { opacity: 1; transform: translateY(0); }
+
+  /* X-axis */
+  .x-axis {
+    display: flex;
+    gap: 8px;
+    padding: 8px 4px 0;
+  }
+  .x-label {
+    flex: 1;
+    text-align: center;
+    font-family: 'Inter', sans-serif;
+    font-size: 18px;
+    color: #ffffff;
+    font-weight: 500;
+  }
+  .x-label.highlight {
+    color: #ffffff;
+    font-weight: 700;
+  }
+
+  .phases { display: none; }
+  .legend { margin: 0 0 24px; }
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+  .phase {
+    padding: 16px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 10px;
+    border-left: 3px solid;
+    transition: background 0.2s;
+  }
+  .phase:hover { background: rgba(255,255,255,0.06); }
+  .phase:nth-child(1) { border-color: #7c9eff; }
+  .phase:nth-child(2) { border-color: #34d399; }
+  .phase:nth-child(3) { border-color: #f472b6; }
+  .phase:nth-child(4) { border-color: var(--accent); }
+
+  .phase-year {
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 6px;
+    letter-spacing: 0.05em;
+  }
+  .phase:nth-child(1) .phase-year { color: #7c9eff; }
+  .phase:nth-child(2) .phase-year { color: #34d399; }
+  .phase:nth-child(3) .phase-year { color: #f472b6; }
+  .phase:nth-child(4) .phase-year { color: var(--accent); }
+
+  .phase-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 5px;
+    line-height: 1.3;
+  }
+  .phase-desc {
+    font-family: 'Inter', sans-serif;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  /* Animate bars in */
+  @keyframes growUp {
+    from { transform: scaleY(0); transform-origin: bottom; }
+    to   { transform: scaleY(1); transform-origin: bottom; }
+  }
+  .stacked-bar { animation: growUp 0.9s cubic-bezier(0.16,1,0.3,1) both; }
+  .bar-group:nth-child(1)  .stacked-bar { animation-delay: 0.0s; }
+  .bar-group:nth-child(2)  .stacked-bar { animation-delay: 0.05s; }
+  .bar-group:nth-child(3)  .stacked-bar { animation-delay: 0.10s; }
+  .bar-group:nth-child(4)  .stacked-bar { animation-delay: 0.15s; }
+  .bar-group:nth-child(5)  .stacked-bar { animation-delay: 0.20s; }
+  .bar-group:nth-child(6)  .stacked-bar { animation-delay: 0.25s; }
+  .bar-group:nth-child(7)  .stacked-bar { animation-delay: 0.30s; }
+  .bar-group:nth-child(8)  .stacked-bar { animation-delay: 0.35s; }
+  .bar-group:nth-child(9)  .stacked-bar { animation-delay: 0.40s; }
+  .bar-group:nth-child(10) .stacked-bar { animation-delay: 0.45s; }
+  .bar-group:nth-child(11) .stacked-bar { animation-delay: 0.50s; }
+  .bar-group:nth-child(12) .stacked-bar { animation-delay: 0.55s; }
+</style>
+</head>
+<body>
+<div class="slide">
+  <div class="header">
+    <div class="chart-label">Chart 1 — Median Projections · Linear Scale · Stacked by Organisation</div>
+    <div class="chart-title">In-Space Power Demand<br><span>by Actor</span></div>
+    <div class="chart-subtitle">Gigawatts (GW) · 2020–2035</div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--spacex)"></div>SpaceX</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--starcloud)"></div>Starcloud</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--axiom)"></div>Axiom Space</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--google)"></div>Google / Blue Origin / Others</div>
+  </div>
+
+  <div class="chart-area">
+    <div class="y-axis" id="yAxis"></div>
+    <div class="chart-inner">
+      <div class="grid-lines" id="gridLines"></div>
+      <div class="bars-container" id="barsContainer"></div>
+      <div class="x-axis" id="xAxis"></div>
+    </div>
+  </div>
+
+  <div class="phases">
+    <div class="phase">
+      <div class="phase-year">2025 – 26</div>
+      <div class="phase-title">Pioneer Phase</div>
+      <div class="phase-desc">First H100s in orbit; Axiom ODC Nodes 1 & 2 launch (Jan '26); SpaceX FCC filing</div>
+    </div>
+    <div class="phase">
+      <div class="phase-year">2027 – 28</div>
+      <div class="phase-title">Scale-Up</div>
+      <div class="phase-desc">Starcloud 5 GW target; Blue Origin TeraWave online; Google Suncatcher test sats</div>
+    </div>
+    <div class="phase">
+      <div class="phase-year">2029 – 30</div>
+      <div class="phase-title">Constellation Era</div>
+      <div class="phase-desc">SpaceX dominates as Starship launch cadence matures</div>
+    </div>
+    <div class="phase">
+      <div class="phase-year">2032 – 35</div>
+      <div class="phase-title">Terawatt Frontier</div>
+      <div class="phase-desc">Google cost-competitive era; ~600 GW median total</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const data = [
+    { year: '2024', spacex: 0,   starcloud: 0,   axiom: 0,   google: 0 },
+    { year: '2025', spacex: 0.1, starcloud: 0,   axiom: 0,   google: 0 },
+    { year: '2026', spacex: 0.4, starcloud: 0.1, axiom: 0,   google: 0 },
+    { year: '2027', spacex: 1,   starcloud: 0.5, axiom: 0,   google: 0.1 },
+    { year: '2028', spacex: 3,   starcloud: 2,   axiom: 0.2, google: 0.5 },
+    { year: '2029', spacex: 8,   starcloud: 3,   axiom: 0.5, google: 2 },
+    { year: '2030', spacex: 25,  starcloud: 8,   axiom: 1,   google: 8 },
+    { year: '2031', spacex: 80,  starcloud: 15,  axiom: 3,   google: 20 },
+    { year: '2032', spacex: 160, starcloud: 30,  axiom: 6,   google: 50 },
+    { year: '2033', spacex: 250, starcloud: 50,  axiom: 10,  google: 100 },
+    { year: '2034', spacex: 330, starcloud: 70,  axiom: 15,  google: 150 },
+    { year: '2035', spacex: 380, starcloud: 100, axiom: 50,  google: 200 },
+  ];
+
+  const MAX_GW = 800;
+  const Y_STEPS = [0, 150, 300, 450, 800];
+
+  // Y-axis
+  const yAxis = document.getElementById('yAxis');
+  Y_STEPS.forEach(v => {
+    const el = document.createElement('div');
+    el.className = 'y-label';
+    el.textContent = v === 0 ? '0' : v + 'GW';
+    yAxis.appendChild(el);
+  });
+
+  // Grid lines
+  const gridLines = document.getElementById('gridLines');
+  Y_STEPS.forEach((v, i) => {
+    const el = document.createElement('div');
+    el.className = 'grid-line' + (v === 0 ? ' zero' : '');
+    gridLines.appendChild(el);
+  });
+
+  // Bars
+  const barsContainer = document.getElementById('barsContainer');
+  const xAxis = document.getElementById('xAxis');
+  const CHART_H = 380;
+
+  data.forEach(d => {
+    const total = d.spacex + d.starcloud + d.axiom + d.google;
+    const pct = (total / MAX_GW) * 100;
+
+    const group = document.createElement('div');
+    group.className = 'bar-group';
+
+    const valLabel = document.createElement('div');
+    valLabel.className = 'bar-value';
+    valLabel.textContent = total >= 1 ? Math.round(total) + ' GW' : (total > 0 ? '<1 GW' : '');
+    group.appendChild(valLabel);
+
+    const bar = document.createElement('div');
+    bar.className = 'stacked-bar';
+    bar.style.height = Math.max(pct, 0) + '%';
+
+    const segs = [
+      { key: 'google',    cls: 'seg-google',   val: d.google },
+      { key: 'axiom',     cls: 'seg-axiom',    val: d.axiom },
+      { key: 'starcloud', cls: 'seg-starcloud', val: d.starcloud },
+      { key: 'spacex',    cls: 'seg-spacex',   val: d.spacex },
+    ];
+    segs.forEach(s => {
+      if (s.val <= 0) return;
+      const seg = document.createElement('div');
+      seg.className = 'bar-seg ' + s.cls;
+      seg.style.height = ((s.val / MAX_GW) * CHART_H) + 'px';
+      bar.appendChild(seg);
+    });
+
+    group.appendChild(bar);
+    barsContainer.appendChild(group);
+
+    // X label
+    const xLabel = document.createElement('div');
+    xLabel.className = 'x-label' + (parseInt(d.year) % 5 === 0 ? ' highlight' : '');
+    xLabel.textContent = d.year.slice(2);
+    xAxis.appendChild(xLabel);
+  });
+</script>
+</body>
+</html>

@@ -199,7 +199,7 @@ def solve_one(stow_width, stow_depth, expanded_depth, n_states=2,
             "short": float(value(model.short)),
             "offset": float(value(model.offset)),
             "hinge_par": float(value(model.hinge_par)),
-            "n_cells": int(round(value(model.n))),
+            "n_cells": 10, #int(round(value(model.n))),
             "alpha_stow": float(angle(model.sa[1], model.ca[1])),
             "alpha_deploy": float(angle(model.sa[n_states], model.ca[n_states])),
             "beta_stow": float(angle(model.sb[1], model.cb[1])),
@@ -399,11 +399,124 @@ def sweep_offsets_and_thicknesses(args):
 
 THREE_JS_VIEWER = r"""
 // ─── 3D Scissor Linkage Viewer ───────────────────────────────────────────────
-// Expects: window.viewerLoadSolution(solObj) where solObj = { inputs, solution }
+// Realistic materials: carbon fiber beams, brushed aluminum hinges
 
 (function() {
   const DEG = Math.PI / 180;
   const RAD = 180 / Math.PI;
+
+  // ── Procedural textures ──
+  function makeCarbonFiberTexture(size) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, size, size);
+    const cell = size / 16;
+    for (let y = 0; y < size; y += cell) {
+      for (let x = 0; x < size; x += cell) {
+        const checker = ((x / cell + y / cell) % 2 === 0);
+        ctx.fillStyle = checker ? '#222222' : '#181818';
+        ctx.fillRect(x, y, cell, cell);
+        ctx.strokeStyle = checker ? '#252525' : '#1c1c1c';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + cell, y + cell); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x + cell, y); ctx.lineTo(x, y + cell); ctx.stroke();
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 1);
+    return tex;
+  }
+
+  function makeCarbonNormalMap(size) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#8080ff';
+    ctx.fillRect(0, 0, size, size);
+    const cell = size / 16;
+    for (let y = 0; y < size; y += cell) {
+      for (let x = 0; x < size; x += cell) {
+        const checker = ((x / cell + y / cell) % 2 === 0);
+        ctx.fillStyle = checker ? '#8888ff' : '#7878ff';
+        ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 1);
+    return tex;
+  }
+
+  function makeBrushedMetalTexture(size) {
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#c8c8c8';
+    ctx.fillRect(0, 0, size, size);
+    for (let y = 0; y < size; y++) {
+      const v = 180 + Math.random() * 30;
+      ctx.strokeStyle = `rgb(${v},${v},${v})`;
+      ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(size, y + 0.5); ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1, 4);
+    return tex;
+  }
+
+  // ── Material cache ──
+  let matCache = null;
+  function getMaterials() {
+    if (matCache) return matCache;
+    const cfTex = makeCarbonFiberTexture(256);
+    const cfNorm = makeCarbonNormalMap(256);
+    const alTex = makeBrushedMetalTexture(256);
+
+    matCache = {
+      carbonFiber: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x2a2a2a, metalness: 0.15, roughness: 0.35,
+      }),
+      carbonFiberOffset: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x1a1a22, metalness: 0.15, roughness: 0.35,
+      }),
+      aluminum: new THREE.MeshStandardMaterial({
+        map: alTex, color: 0xd0d0d8, metalness: 0.85, roughness: 0.25,
+      }),
+      aluminumDark: new THREE.MeshStandardMaterial({
+        map: alTex, color: 0x8888a0, metalness: 0.85, roughness: 0.3,
+      }),
+      aluminumGreen: new THREE.MeshStandardMaterial({
+        map: alTex, color: 0x88aa88, metalness: 0.8, roughness: 0.28,
+      }),
+      carbonShort: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x1a2a1a, metalness: 0.15, roughness: 0.35,
+      }),
+      longeron: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x2a1a2a, metalness: 0.15, roughness: 0.35,
+      }),
+      joint: new THREE.MeshStandardMaterial({
+        color: 0x444444, metalness: 0.9, roughness: 0.15,
+      }),
+    };
+    return matCache;
+  }
+
+  const MAT_CARBON  = 'carbonFiber';
+  const MAT_CARBON_OFF = 'carbonFiberOffset';
+  const MAT_CARBON_SHORT = 'carbonShort';
+  const MAT_ALU     = 'aluminum';
+  const MAT_ALU_DARK = 'aluminumDark';
+  const MAT_ALU_GREEN = 'aluminumGreen';
+  const MAT_LONGERON = 'longeron';
+  const MAT_JOINT   = 'joint';
 
   function compute2D(L, O, alpha) {
     const ha = alpha / 2;
@@ -416,21 +529,21 @@ THREE_JS_VIEWER = r"""
     return { P1x, P1y, P2x, P2y, P3x, P3y, c, a: L * ca };
   }
 
-  function addTube(grp, a, b, color, radius) {
+  function addTube(grp, a, b, matKey, radius) {
     const dir = new THREE.Vector3().subVectors(b, a);
     const len = dir.length();
     if (len < 1e-5) return;
-    const geo = new THREE.CylinderGeometry(radius, radius, len, 12);
-    const mat = new THREE.MeshPhongMaterial({ color, shininess: 60 });
+    const geo = new THREE.CylinderGeometry(radius, radius, len, 16);
+    const mat = getMaterials()[matKey];
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.addVectors(a, b).multiplyScalar(0.5);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
     grp.add(mesh);
   }
 
-  function addBall(grp, pos, color, radius) {
-    const geo = new THREE.SphereGeometry(radius, 12, 12);
-    const mat = new THREE.MeshPhongMaterial({ color, shininess: 80 });
+  function addBall(grp, pos, matKey, radius) {
+    const geo = new THREE.SphereGeometry(radius, 16, 16);
+    const mat = getMaterials()[matKey];
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(pos);
     grp.add(mesh);
@@ -448,7 +561,7 @@ THREE_JS_VIEWER = r"""
     );
   }
 
-  function addShortDnHinge(grp, dnApex, pA, hingePar, hingePer, color, radius, Jrs) {
+  function addShortDnHinge(grp, dnApex, pA, hingePar, hingePer, matKey, radius, Jrs) {
     const tx = -Math.cos(pA);
     const tz = Math.sin(pA);
     const nx = Math.sin(pA);
@@ -459,28 +572,52 @@ THREE_JS_VIEWER = r"""
     const hPerEnd = new THREE.Vector3(
       hParEnd.x + hingePer * nx, hParEnd.y, hParEnd.z + hingePer * nz
     );
-    addTube(grp, dnApex, hParEnd, color, radius);
-    addTube(grp, hParEnd, hPerEnd, color, radius);
-    addBall(grp, hParEnd, color, Jrs);
-    addBall(grp, hPerEnd, color, Jrs);
+    addTube(grp, dnApex, hParEnd, matKey, radius);
+    addTube(grp, hParEnd, hPerEnd, matKey, radius);
+    addBall(grp, hParEnd, matKey, Jrs);
+    addBall(grp, hPerEnd, matKey, Jrs);
   }
 
   function addRefFrame(grp, pos, size, T) {
     const r = T * 0.4;
-    addTube(grp, pos, new THREE.Vector3(pos.x + size, pos.y, pos.z), 0xff0000, r);
-    addTube(grp, pos, new THREE.Vector3(pos.x, pos.y + size, pos.z), 0x00ff00, r);
-    addTube(grp, pos, new THREE.Vector3(pos.x, pos.y, pos.z + size), 0x0000ff, r);
+    const matR = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.5, roughness: 0.4 });
+    const matG = new THREE.MeshStandardMaterial({ color: 0x00ff00, metalness: 0.5, roughness: 0.4 });
+    const matB = new THREE.MeshStandardMaterial({ color: 0x0000ff, metalness: 0.5, roughness: 0.4 });
+    function tube(a, b, mat) {
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length(); if (len < 1e-5) return;
+      const geo = new THREE.CylinderGeometry(r, r, len, 8);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.addVectors(a, b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      grp.add(mesh);
+    }
+    tube(pos, new THREE.Vector3(pos.x + size, pos.y, pos.z), matR);
+    tube(pos, new THREE.Vector3(pos.x, pos.y + size, pos.z), matG);
+    tube(pos, new THREE.Vector3(pos.x, pos.y, pos.z + size), matB);
   }
 
   function addRotatedRefFrame(grp, pos, size, T, angle) {
     const r = T * 0.4;
     const ca = Math.cos(angle), sa = Math.sin(angle);
-    addTube(grp, pos, new THREE.Vector3(pos.x + size * ca, pos.y, pos.z - size * sa), 0xff0000, r);
-    addTube(grp, pos, new THREE.Vector3(pos.x, pos.y + size, pos.z), 0x00ff00, r);
-    addTube(grp, pos, new THREE.Vector3(pos.x + size * sa, pos.y, pos.z + size * ca), 0x0000ff, r);
+    const matR = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.5, roughness: 0.4 });
+    const matG = new THREE.MeshStandardMaterial({ color: 0x00ff00, metalness: 0.5, roughness: 0.4 });
+    const matB = new THREE.MeshStandardMaterial({ color: 0x0000ff, metalness: 0.5, roughness: 0.4 });
+    function tube(a, b, mat) {
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length(); if (len < 1e-5) return;
+      const geo = new THREE.CylinderGeometry(r, r, len, 8);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.addVectors(a, b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      grp.add(mesh);
+    }
+    tube(pos, new THREE.Vector3(pos.x + size * ca, pos.y, pos.z - size * sa), matR);
+    tube(pos, new THREE.Vector3(pos.x, pos.y + size, pos.z), matG);
+    tube(pos, new THREE.Vector3(pos.x + size * sa, pos.y, pos.z + size * ca), matB);
   }
 
-  function buildScene(L, O, alpha, nCells, T, hingePar, hingePer, S, h, showCells) {
+  function buildScene(L, O, alpha, nCells, T, hingePar, hingePer, S, h, showCells, longeronLen, showRefFrames, stowWidth) {
     const root = new THREE.Group();
     const { P1x, P1y, P2x, P2y, P3x, P3y, c, a } = compute2D(L, O, alpha);
 
@@ -503,14 +640,6 @@ THREE_JS_VIEWER = r"""
     const Jrs = T * 1.1;
     const refSize = 0.08;
 
-    const COL_LONG = 0x2255cc;
-    const COL_OFF = 0xc4164a;
-    const COL_HINGE = 0x999999;
-    const COL_JOINT = 0x444444;
-    const COL_SHORT_HINGE = 0x44bb44;
-    const COL_SHORT = 0x1d8c36;
-    const COL_LONGERON = 0xcc2255;
-
     for (let i = 0; i < cellsToShow; i++) {
       const g = new THREE.Group();
       g.position.set(0, -i * c, 0);
@@ -521,97 +650,91 @@ THREE_JS_VIEWER = r"""
       const rP1 = new THREE.Vector3(P1x, P1y, +T);
       const rP2 = new THREE.Vector3(P2x, P2y, -T);
 
-      addTube(g, rOup, rP1, COL_LONG, T);
-      addTube(g, rOdn, rP2, COL_LONG, T);
+      addTube(g, rOup, rP1, MAT_CARBON, T);
+      addTube(g, rOdn, rP2, MAT_CARBON, T);
 
       const rP1_up = new THREE.Vector3(P1x, P1y, +2*T);
-      addBall(g, rP1_up, COL_HINGE, Jrs);
-      const rH1 = new THREE.Vector3(P1x + hingePar, P1y, +2*T);
-      const rH2 = new THREE.Vector3(P1x + hingePar, P1y, 2*T+hingePer);
-      addTube(g, rP1_up, rH1, COL_HINGE, Toff);
-      addTube(g, rH1, rH2, COL_HINGE, Toff);
+      addBall(g, rP1_up, MAT_ALU, Jrs);
+      const rH2 = new THREE.Vector3(P1x, P1y, 2*T+hingePer);
+      addTube(g, rP1_up, rH2, MAT_ALU, Toff);
 
       const rSH = new THREE.Vector3(
         rH2.x + hingePer * Math.sin(planeAngle), rH2.y,
         rH2.z + hingePer * Math.cos(planeAngle)
       );
-      addTube(g, rH2, rSH, COL_SHORT_HINGE, Toff);
+      addTube(g, rH2, rSH, MAT_ALU_GREEN, Toff);
 
       const rSH_par = new THREE.Vector3(
         rSH.x - hingePar * Math.cos(planeAngle), rSH.y,
         rSH.z + hingePar * Math.sin(planeAngle)
       );
-      addTube(g, rSH, rSH_par, COL_SHORT_HINGE, Toff);
-      addBall(g, rSH, COL_SHORT_HINGE, Jrs);
-      addBall(g, rSH_par, COL_SHORT_HINGE, Jrs);
+      addTube(g, rSH, rSH_par, MAT_ALU_GREEN, Toff);
+      addBall(g, rSH, MAT_ALU_GREEN, Jrs);
+      addBall(g, rSH_par, MAT_ALU_GREEN, Jrs);
 
-      addRefFrame(g, rH2, refSize, T);
-      addRotatedRefFrame(g, rSH_par, refSize, T, planeAngle);
+      if (showRefFrames) addRefFrame(g, rH2, refSize, T);
+      if (showRefFrames) addRotatedRefFrame(g, rSH_par, refSize, T, planeAngle);
 
       const rSH_par_up = new THREE.Vector3(rSH_par.x, rSH_par.y, rSH_par.z + T);
       const rShortDn = shortApex(rSH_par_up, planeAngle, halfBeta, S, -1);
       const rSH_par_up_up = new THREE.Vector3(rSH_par_up.x, rSH_par_up.y, rSH_par_up.z + T);
       const rShortUp = shortApex(rSH_par_up_up, planeAngle, halfBeta, S, +1);
-      addTube(g, rSH_par_up_up, rShortUp, COL_SHORT, Toff);
-      addBall(g, rShortUp, COL_SHORT, Jrs);
-      addBall(g, rSH_par_up_up, COL_SHORT, Jrs);
+      addTube(g, rSH_par_up_up, rShortUp, MAT_CARBON_SHORT, Toff);
+      addBall(g, rShortUp, MAT_CARBON_SHORT, Jrs);
+      addBall(g, rSH_par_up_up, MAT_CARBON_SHORT, Jrs);
 
       if (i > 0) {
-        addTube(g, rSH_par_up, rShortDn, COL_SHORT, Toff);
-        addBall(g, rSH_par_up, COL_SHORT, Jrs);
-        addBall(g, rShortDn, COL_SHORT, Jrs);
+        addTube(g, rSH_par_up, rShortDn, MAT_CARBON_SHORT, Toff);
+        addBall(g, rSH_par_up, MAT_CARBON_SHORT, Jrs);
+        addBall(g, rShortDn, MAT_CARBON_SHORT, Jrs);
         const rShortDn_dn = new THREE.Vector3(rShortDn.x, rShortDn.y, rShortDn.z - T);
-        addShortDnHinge(g, rShortDn_dn, planeAngle, hingePar, -hingePer, COL_SHORT_HINGE, Toff, Jrs);
-        addBall(g, rShortDn_dn, COL_SHORT_HINGE, Jrs);
+        addShortDnHinge(g, rShortDn_dn, planeAngle, hingePar, -hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, rShortDn_dn, MAT_ALU_GREEN, Jrs);
       }
 
       if (i === cellsToShow - 1) {
         const rP3 = new THREE.Vector3(P3x, P3y, +T);
         const rP3_up = new THREE.Vector3(P3x, P3y, +2*T);
         const rP2_up = new THREE.Vector3(P2x, P2y, +T);
-        addTube(g, rP2_up, rP3, COL_OFF, Toff);
-        const rH3 = new THREE.Vector3(P3x + hingePar, P3y, 2*T);
-        addTube(g, rP3_up, rH3, COL_HINGE, Toff);
-        const rH3up = new THREE.Vector3(P3x + hingePar, P3y, 2*T + hingePer);
-        addTube(g, rH3, rH3up, COL_HINGE, Toff);
+        addTube(g, rP2_up, rP3, MAT_CARBON_OFF, Toff);
+        const rH3up = new THREE.Vector3(P3x, P3y, 2*T + hingePer);
+        addTube(g, rP3_up, rH3up, MAT_ALU, Toff);
         const rSH3 = new THREE.Vector3(
           rH3up.x + hingePer * Math.sin(planeAngle), rH3up.y,
           rH3up.z + hingePer * Math.cos(planeAngle)
         );
-        addTube(g, rH3up, rSH3, COL_SHORT_HINGE, Toff);
+        addTube(g, rH3up, rSH3, MAT_ALU_GREEN, Toff);
         const rSH3_par = new THREE.Vector3(
           rSH3.x - hingePar * Math.cos(planeAngle), rSH3.y,
           rSH3.z + hingePar * Math.sin(planeAngle)
         );
-        addTube(g, rSH3, rSH3_par, COL_SHORT_HINGE, Toff);
-        addRefFrame(g, rH3up, refSize, T);
-        addRotatedRefFrame(g, rSH3_par, refSize, T, planeAngle);
+        addTube(g, rSH3, rSH3_par, MAT_ALU_GREEN, Toff);
+        if (showRefFrames) addRefFrame(g, rH3up, refSize, T);
+        if (showRefFrames) addRotatedRefFrame(g, rSH3_par, refSize, T, planeAngle);
         const rSH3_par_up = new THREE.Vector3(rSH3_par.x, rSH3_par.y, rSH3_par.z + T);
         const rSh3Dn = shortApex(rSH3_par_up, planeAngle, halfBeta, S, -1);
-        addTube(g, rSH3_par_up, rSh3Dn, COL_SHORT, Toff);
-        addBall(g, rSH3_par_up, COL_SHORT, Jrs);
-        addBall(g, rSh3Dn, COL_SHORT, Jrs);
+        addTube(g, rSH3_par_up, rSh3Dn, MAT_CARBON_SHORT, Toff);
+        addBall(g, rSH3_par_up, MAT_CARBON_SHORT, Jrs);
+        addBall(g, rSh3Dn, MAT_CARBON_SHORT, Jrs);
         const rSh3Dn_up = new THREE.Vector3(rSh3Dn.x, rSh3Dn.y, rSh3Dn.z - T);
-        addShortDnHinge(g, rSh3Dn_up, planeAngle, hingePar, -hingePer, COL_SHORT_HINGE, Toff, Jrs);
-        addBall(g, rSh3Dn_up, COL_SHORT_HINGE, Jrs);
-        addBall(g, rP2_up, COL_OFF, Jrs);
-        addBall(g, rP3_up, COL_HINGE, Jrs);
-        addBall(g, rP3, COL_OFF, Jrs);
-        addBall(g, rH3, COL_HINGE, Jrs);
-        addBall(g, rH3up, COL_HINGE, Jrs);
-        addBall(g, rSH3, COL_SHORT_HINGE, Jrs);
-        addBall(g, rSH3_par, COL_SHORT_HINGE, Jrs);
+        addShortDnHinge(g, rSh3Dn_up, planeAngle, hingePar, -hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, rSh3Dn_up, MAT_ALU_GREEN, Jrs);
+        addBall(g, rP2_up, MAT_CARBON_OFF, Jrs);
+        addBall(g, rP3_up, MAT_ALU, Jrs);
+        addBall(g, rP3, MAT_CARBON_OFF, Jrs);
+        addBall(g, rH3up, MAT_ALU, Jrs);
+        addBall(g, rSH3, MAT_ALU_GREEN, Jrs);
+        addBall(g, rSH3_par, MAT_ALU_GREEN, Jrs);
       }
 
-      addBall(g, rOup, COL_JOINT, Jr);
-      addBall(g, rOdn, COL_JOINT, Jr);
-      addBall(g, rP1, COL_LONG, Jrs);
-      addBall(g, rP2, COL_LONG, Jrs);
-      addBall(g, rH1, COL_HINGE, Jrs);
-      addBall(g, rH2, COL_HINGE, Jrs);
+      addBall(g, rOup, MAT_JOINT, Jr);
+      addBall(g, rOdn, MAT_JOINT, Jr);
+      addBall(g, rP1, MAT_CARBON, Jrs);
+      addBall(g, rP2, MAT_CARBON, Jrs);
+      addBall(g, rH2, MAT_ALU, Jrs);
 
       // ── Longerons (right) ──
-      const longeron_length = 0.0625;
+      const longeron_length = longeronLen;
       const longeron_halfAngle = Math.asin(c/(2*longeron_length));
       const rP1_offset = new THREE.Vector3(P1x, P1y, -2*T);
       const rP3r = new THREE.Vector3(P3x, P3y, -T);
@@ -626,24 +749,24 @@ THREE_JS_VIEWER = r"""
         rP3_offset.y + Math.sin(longeron_halfAngle)*longeron_length,
         rP3_offset.z - T
       );
-      addTube(g, rP1_offset, rP1_Longeron, COL_LONGERON, Toff);
-      addTube(g, rP3_offset, rP3_Longeron, COL_LONGERON, Toff);
-      addTube(g, rP1, rP1_offset, COL_HINGE, Jrs);
-      addTube(g, rP3r, rP3_offset, COL_HINGE, Jrs);
-      addBall(g, rP1_Longeron, COL_LONGERON, Jrs);
-      addBall(g, rP3_Longeron, COL_LONGERON, Jrs);
+      addTube(g, rP1_offset, rP1_Longeron, MAT_LONGERON, Toff);
+      addTube(g, rP3_offset, rP3_Longeron, MAT_LONGERON, Toff);
+      addTube(g, rP1, rP1_offset, MAT_ALU, Jrs);
+      addTube(g, rP3r, rP3_offset, MAT_ALU, Jrs);
+      addBall(g, rP1_Longeron, MAT_LONGERON, Jrs);
+      addBall(g, rP3_Longeron, MAT_LONGERON, Jrs);
 
       if (i > 0 && i % 2 === 0) {
         const rLongUp_ref = new THREE.Vector3(rShortUp.x, rShortUp.y, rShortUp.z +2*T);
-        addTube(g, rShortUp, rLongUp_ref, COL_HINGE, Toff);
+        addTube(g, rShortUp, rLongUp_ref, MAT_ALU, Toff);
         const rLongUp = new THREE.Vector3(
           rShortUp.x + Math.cos(longeron_halfAngle)*longeron_length,
           rShortUp.y + Math.sin(longeron_halfAngle)*longeron_length,
           rShortUp.z +2*T
         );
-        addTube(g, rLongUp_ref, rLongUp, COL_LONGERON, Toff);
-        addBall(g, rLongUp_ref, COL_LONGERON, Jrs);
-        addBall(g, rLongUp, COL_LONGERON, Jrs);
+        addTube(g, rLongUp_ref, rLongUp, MAT_LONGERON, Toff);
+        addBall(g, rLongUp_ref, MAT_LONGERON, Jrs);
+        addBall(g, rLongUp, MAT_LONGERON, Jrs);
 
         const rLongDn_ref = new THREE.Vector3(rShortDn.x, rShortDn.y, rShortDn.z +2*T);
         const rLongDn = new THREE.Vector3(
@@ -651,9 +774,9 @@ THREE_JS_VIEWER = r"""
           rShortDn.y - Math.sin(longeron_halfAngle)*longeron_length,
           rShortDn.z +2*T
         );
-        addTube(g, rLongDn_ref, rLongDn, COL_LONGERON, Toff);
-        addBall(g, rLongDn_ref, COL_LONGERON, Jrs);
-        addBall(g, rLongDn, COL_LONGERON, Jrs);
+        addTube(g, rLongDn_ref, rLongDn, MAT_LONGERON, Toff);
+        addBall(g, rLongDn_ref, MAT_LONGERON, Jrs);
+        addBall(g, rLongDn, MAT_LONGERON, Jrs);
       }
 
       // ── LEFT HALF (-X) ──
@@ -662,96 +785,90 @@ THREE_JS_VIEWER = r"""
       const lP1 = new THREE.Vector3(-P1x, P1y, -T);
       const lP2 = new THREE.Vector3(-P2x, P2y, +T);
 
-      addTube(g, lOup, lP1, COL_LONG, Toff);
-      addTube(g, lOdn, lP2, COL_LONG, Toff);
+      addTube(g, lOup, lP1, MAT_CARBON, Toff);
+      addTube(g, lOdn, lP2, MAT_CARBON, Toff);
 
       const spacer = new THREE.Vector3(-P1x, P1y, 2*T);
-      addTube(g, lP1, spacer, COL_HINGE, Toff);
-      const lH1 = new THREE.Vector3(spacer.x - hingePar, spacer.y, spacer.z);
-      const lH2 = new THREE.Vector3(lH1.x, lH1.y, lH1.z + hingePer);
-      addTube(g, spacer, lH1, COL_HINGE, Toff);
-      addTube(g, lH1, lH2, COL_HINGE, Toff);
-      addBall(g, spacer, COL_HINGE, Jrs);
+      addTube(g, lP1, spacer, MAT_ALU, Toff);
+      const lH2 = new THREE.Vector3(spacer.x, spacer.y, spacer.z + hingePer);
+      addTube(g, spacer, lH2, MAT_ALU, Toff);
+      addBall(g, spacer, MAT_ALU, Jrs);
 
       const lSH = new THREE.Vector3(
         lH2.x - hingePer * Math.sin(leftPlaneAngle), lH2.y,
         lH2.z - hingePer * Math.cos(leftPlaneAngle)
       );
-      addTube(g, lH2, lSH, COL_SHORT_HINGE, Toff);
+      addTube(g, lH2, lSH, MAT_ALU_GREEN, Toff);
       const lSH_par = new THREE.Vector3(
         lSH.x - hingePar * Math.cos(leftPlaneAngle), lSH.y,
         lSH.z + hingePar * Math.sin(leftPlaneAngle)
       );
-      addTube(g, lSH, lSH_par, COL_SHORT_HINGE, Toff);
-      addBall(g, lSH, COL_SHORT_HINGE, Jrs);
-      addBall(g, lSH_par, COL_SHORT_HINGE, Jrs);
+      addTube(g, lSH, lSH_par, MAT_ALU_GREEN, Toff);
+      addBall(g, lSH, MAT_ALU_GREEN, Jrs);
+      addBall(g, lSH_par, MAT_ALU_GREEN, Jrs);
 
-      addRefFrame(g, lH2, refSize, T);
-      addRotatedRefFrame(g, lSH_par, refSize, T, -leftPlaneAngle);
+      if (showRefFrames) addRefFrame(g, lH2, refSize, T);
+      if (showRefFrames) addRotatedRefFrame(g, lSH_par, refSize, T, -leftPlaneAngle);
 
       const lSH_par_up = new THREE.Vector3(lSH_par.x, lSH_par.y, lSH_par.z + T);
       const lShortDn = shortApex(lSH_par_up, leftPlaneAngle, halfBeta, S, -1);
       const lSH_par_up_up = new THREE.Vector3(lSH_par_up.x, lSH_par_up.y, lSH_par_up.z + T);
       const lShortUp = shortApex(lSH_par_up_up, leftPlaneAngle, halfBeta, S, +1);
-      addTube(g, lSH_par_up_up, lShortUp, COL_SHORT, Toff);
-      addBall(g, lShortUp, COL_SHORT, Jrs);
-      addBall(g, lSH_par_up_up, COL_SHORT, Jrs);
+      addTube(g, lSH_par_up_up, lShortUp, MAT_CARBON_SHORT, Toff);
+      addBall(g, lShortUp, MAT_CARBON_SHORT, Jrs);
+      addBall(g, lSH_par_up_up, MAT_CARBON_SHORT, Jrs);
 
       if (i > 0) {
-        addTube(g, lSH_par_up, lShortDn, COL_SHORT, Toff);
-        addBall(g, lSH_par_up, COL_SHORT, Jrs);
+        addTube(g, lSH_par_up, lShortDn, MAT_CARBON_SHORT, Toff);
+        addBall(g, lSH_par_up, MAT_CARBON_SHORT, Jrs);
         const lShortDn_dn = new THREE.Vector3(lShortDn.x, lShortDn.y, lShortDn.z - T);
-        addShortDnHinge(g, lShortDn_dn, leftPlaneAngle, hingePar, hingePer, COL_SHORT_HINGE, Toff, Jrs);
-        addBall(g, lShortDn_dn, COL_SHORT_HINGE, Jrs);
-        addBall(g, lShortDn, COL_SHORT, Jrs);
+        addShortDnHinge(g, lShortDn_dn, leftPlaneAngle, hingePar, hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, lShortDn_dn, MAT_ALU_GREEN, Jrs);
+        addBall(g, lShortDn, MAT_CARBON_SHORT, Jrs);
       }
 
       if (i === cellsToShow - 1) {
         const lP3 = new THREE.Vector3(-P3x, P3y, -T);
         const lP2_dn = new THREE.Vector3(-P2x, P2y, -T);
-        addBall(g, lP2_dn, COL_OFF, Jrs);
-        addTube(g, lP2_dn, lP3, COL_OFF, Toff);
-        const lH3 = new THREE.Vector3(-P3x - hingePar, P3y, +2*T);
+        addBall(g, lP2_dn, MAT_CARBON_OFF, Jrs);
+        addTube(g, lP2_dn, lP3, MAT_CARBON_OFF, Toff);
         const lP3_up = new THREE.Vector3(-P3x, P3y, +2*T);
-        addTube(g, lP3_up, lH3, COL_HINGE, Toff);
-        addTube(g, lP3, lP3_up, COL_HINGE, Toff);
-        const lH3up = new THREE.Vector3(-P3x - hingePar, P3y, 2*T + hingePer);
-        addTube(g, lH3, lH3up, COL_HINGE, Toff);
+        addTube(g, lP3_up, lP3, MAT_ALU, Toff);
+        const lH3up = new THREE.Vector3(-P3x, P3y, 2*T + hingePer);
+        addTube(g, lP3_up, lH3up, MAT_ALU, Toff);
         const lSH3 = new THREE.Vector3(
           lH3up.x - hingePer * Math.sin(leftPlaneAngle), lH3up.y,
           lH3up.z - hingePer * Math.cos(leftPlaneAngle)
         );
-        addTube(g, lH3up, lSH3, COL_SHORT_HINGE, Toff);
+        addTube(g, lH3up, lSH3, MAT_ALU_GREEN, Toff);
         const lSH3_par = new THREE.Vector3(
           lSH3.x - hingePar * Math.cos(leftPlaneAngle), lSH3.y,
           lSH3.z + hingePar * Math.sin(leftPlaneAngle)
         );
-        addTube(g, lSH3, lSH3_par, COL_SHORT_HINGE, Toff);
-        addRefFrame(g, lH3up, refSize, T);
-        addRotatedRefFrame(g, lSH3_par, refSize, T, -leftPlaneAngle);
+        addTube(g, lSH3, lSH3_par, MAT_ALU_GREEN, Toff);
+        if (showRefFrames) addRefFrame(g, lH3up, refSize, T);
+        if (showRefFrames) addRotatedRefFrame(g, lSH3_par, refSize, T, -leftPlaneAngle);
         const lSH3_par_up = new THREE.Vector3(lSH3_par.x, lSH3_par.y, lSH3_par.z + T);
         const lSh3Dn = shortApex(lSH3_par_up, leftPlaneAngle, halfBeta, S, -1);
-        addTube(g, lSH3_par_up, lSh3Dn, COL_SHORT, Toff);
-        addBall(g, lSH3_par_up, COL_SHORT, Jrs);
-        addBall(g, lSh3Dn, COL_SHORT, Jrs);
+        addTube(g, lSH3_par_up, lSh3Dn, MAT_CARBON_SHORT, Toff);
+        addBall(g, lSH3_par_up, MAT_CARBON_SHORT, Jrs);
+        addBall(g, lSh3Dn, MAT_CARBON_SHORT, Jrs);
         const lSh3Dn_up = new THREE.Vector3(lSh3Dn.x, lSh3Dn.y, lSh3Dn.z - T);
-        addShortDnHinge(g, lSh3Dn_up, leftPlaneAngle, hingePar, hingePer, COL_SHORT_HINGE, Toff, Jrs);
-        addBall(g, lSh3Dn_up, COL_SHORT_HINGE, Jrs);
-        addBall(g, lP3_up, COL_HINGE, Jrs);
-        addBall(g, lP3, COL_OFF, Jrs);
-        addBall(g, lH3, COL_HINGE, Jrs);
-        addBall(g, lH3up, COL_HINGE, Jrs);
-        addBall(g, lSH3, COL_SHORT_HINGE, Jrs);
-        addBall(g, lSH3_par, COL_SHORT_HINGE, Jrs);
+        addShortDnHinge(g, lSh3Dn_up, leftPlaneAngle, hingePar, hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, lSh3Dn_up, MAT_ALU_GREEN, Jrs);
+        addBall(g, lP3_up, MAT_ALU, Jrs);
+        addBall(g, lP3, MAT_CARBON_OFF, Jrs);
+        addBall(g, lH3up, MAT_ALU, Jrs);
+        addBall(g, lSH3, MAT_ALU_GREEN, Jrs);
+        addBall(g, lSH3_par, MAT_ALU_GREEN, Jrs);
       }
 
-      addBall(g, lP1, COL_LONG, Jrs);
-      addBall(g, lP2, COL_LONG, Jrs);
-      addBall(g, lH1, COL_HINGE, Jrs);
-      addBall(g, lH2, COL_HINGE, Jrs);
+      addBall(g, lP1, MAT_CARBON, Jrs);
+      addBall(g, lP2, MAT_CARBON, Jrs);
+      addBall(g, lH2, MAT_ALU, Jrs);
 
       // Longerons (left)
-      const longeron_length_l = 0.0625;
+      const longeron_length_l = longeronLen;
       const longeron_halfAngle_l = Math.asin(c/(2*longeron_length_l));
       const lP1_offset = new THREE.Vector3(-P1x, P1y, -2*T);
       const lP3l = new THREE.Vector3(-P3x, P3y, -T);
@@ -766,24 +883,24 @@ THREE_JS_VIEWER = r"""
         lP3_offset.y + Math.sin(longeron_halfAngle_l)*longeron_length_l,
         lP3_offset.z - T
       );
-      addTube(g, lP1_offset, lP1_Longeron, COL_LONGERON, Toff);
-      addTube(g, lP3_offset, lP3_Longeron, COL_LONGERON, Toff);
-      addTube(g, lP1_offset, lP1, COL_HINGE, Jrs);
-      addTube(g, lP3l, lP3_offset, COL_HINGE, Jrs);
-      addBall(g, lP1_Longeron, COL_LONGERON, Jrs);
-      addBall(g, lP3_Longeron, COL_LONGERON, Jrs);
+      addTube(g, lP1_offset, lP1_Longeron, MAT_LONGERON, Toff);
+      addTube(g, lP3_offset, lP3_Longeron, MAT_LONGERON, Toff);
+      addTube(g, lP1_offset, lP1, MAT_ALU, Jrs);
+      addTube(g, lP3l, lP3_offset, MAT_ALU, Jrs);
+      addBall(g, lP1_Longeron, MAT_LONGERON, Jrs);
+      addBall(g, lP3_Longeron, MAT_LONGERON, Jrs);
 
       if (i > 0 && i % 2 === 1) {
         const lLongUp_ref = new THREE.Vector3(lShortUp.x, lShortUp.y, lShortUp.z +2*T);
-        addTube(g, lShortUp, lLongUp_ref, COL_HINGE, Toff);
+        addTube(g, lShortUp, lLongUp_ref, MAT_ALU, Toff);
         const lLongUp = new THREE.Vector3(
           lShortUp.x - Math.cos(longeron_halfAngle_l)*longeron_length_l,
           lShortUp.y + Math.sin(longeron_halfAngle_l)*longeron_length_l,
           lShortUp.z +2*T
         );
-        addTube(g, lLongUp_ref, lLongUp, COL_LONGERON, Toff);
-        addBall(g, lLongUp_ref, COL_LONGERON, Jrs);
-        addBall(g, lLongUp, COL_LONGERON, Jrs);
+        addTube(g, lLongUp_ref, lLongUp, MAT_LONGERON, Toff);
+        addBall(g, lLongUp_ref, MAT_LONGERON, Jrs);
+        addBall(g, lLongUp, MAT_LONGERON, Jrs);
 
         const lLongDn_ref = new THREE.Vector3(lShortDn.x, lShortDn.y, lShortDn.z +2*T);
         const lLongDn = new THREE.Vector3(
@@ -791,21 +908,112 @@ THREE_JS_VIEWER = r"""
           lShortDn.y - Math.sin(longeron_halfAngle_l)*longeron_length_l,
           lShortDn.z +2*T
         );
-        addTube(g, lLongDn_ref, lLongDn, COL_LONGERON, Toff);
-        addBall(g, lLongDn_ref, COL_LONGERON, Jrs);
-        addBall(g, lLongDn, COL_LONGERON, Jrs);
+        addTube(g, lLongDn_ref, lLongDn, MAT_LONGERON, Toff);
+        addBall(g, lLongDn_ref, MAT_LONGERON, Jrs);
+        addBall(g, lLongDn, MAT_LONGERON, Jrs);
       }
 
       root.add(g);
     }
 
-    // Ground plane
-    const sz = Math.max(L * 4, c * cellsToShow * 1.2, 0.5);
-    const plGeo = new THREE.PlaneGeometry(sz, sz);
-    const plMat = new THREE.MeshBasicMaterial({ color: 0x4488ff, transparent: true, opacity: 0.015, side: THREE.DoubleSide });
-    const pl = new THREE.Mesh(plGeo, plMat);
-    pl.position.set(0, -c * Math.max(0, cellsToShow - 1) / 2, 0);
-    root.add(pl);
+    // ── Solar panel surface (translucent blue, on top, stow width x deployed depth) ──
+    const panelDepth = c * cellsToShow;
+    const panelWidth = stowWidth || (2 * S + 4 * hingePar);
+    if (panelDepth > 1e-4 && panelWidth > 1e-4) {
+      const panelGeo = new THREE.PlaneGeometry(panelWidth, panelDepth);
+      const panelMat = new THREE.MeshStandardMaterial({
+        color: 0x1155cc,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        metalness: 0.3,
+        roughness: 0.6,
+      });
+      const panel = new THREE.Mesh(panelGeo, panelMat);
+      // Position at top of structure (P1y-gy level), centered over deployed cells
+      panel.position.set(0, P1y-gy, -0.06);
+      // Rotate to lie flat in XY plane (default PlaneGeometry is in XY, we want XY)
+      root.add(panel);
+
+      // Grid lines on panel for solar cell look
+      const gridMat = new THREE.LineBasicMaterial({ color: 0x2266dd, transparent: true, opacity: 0.25 });
+      const nGridX = Math.max(2, Math.round(panelWidth / (T * 20)));
+      const nGridY = Math.max(2, Math.round(panelDepth / (T * 20)));
+      for (let gx = 0; gx <= nGridX; gx++) {
+        const x = -panelWidth/2 + gx * panelWidth / nGridX;
+        const pts = [new THREE.Vector3(x, P1y-gy, -0.061), new THREE.Vector3(x, P1y - panelDepth, 0.001)];
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+        root.add(new THREE.Line(lineGeo, gridMat));
+      }
+      for (let gy = 0; gy <= nGridY; gy++) {
+        const y = P1y - gy * panelDepth / nGridY;
+        const pts = [new THREE.Vector3(-panelWidth/2, y, 0.001), new THREE.Vector3(panelWidth/2, y, 0.001)];
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+        root.add(new THREE.Line(lineGeo, gridMat));
+      }
+    }
+
+    // ── Satellite bus (top of structure) ──
+    const busWidth = panelWidth;
+    const busHeight = busWidth * 0.6;
+    const busDepth = busWidth * 0.8;
+    const busY = P1y + busHeight / 2 + T * 4;
+
+    const busMat = new THREE.MeshStandardMaterial({
+      color: 0xcccc88,
+      metalness: 0.7,
+      roughness: 0.3,
+    });
+    const busGeo = new THREE.BoxGeometry(busWidth, busHeight, busDepth);
+    const bus = new THREE.Mesh(busGeo, busMat);
+    bus.position.set(0, busY, 0);
+    root.add(bus);
+
+    // Solar panel wings on satellite (small fixed panels)
+    const wingW = busWidth * 0.15;
+    const wingH = busHeight * 0.8;
+    const wingD = busDepth * 1.8;
+    const wingMat = new THREE.MeshStandardMaterial({
+      color: 0x1144aa,
+      metalness: 0.4,
+      roughness: 0.5,
+      side: THREE.DoubleSide,
+    });
+    const wingGeoL = new THREE.BoxGeometry(wingW, wingH * 0.05, wingD);
+    const wingL = new THREE.Mesh(wingGeoL, wingMat);
+    wingL.position.set(-busWidth/2 - wingW/2, busY, 0);
+    root.add(wingL);
+    const wingR = new THREE.Mesh(wingGeoL, wingMat);
+    wingR.position.set(busWidth/2 + wingW/2, busY, 0);
+    root.add(wingR);
+
+    // Antenna dish
+    const dishR = busWidth * 0.2;
+    const dishGeo = new THREE.SphereGeometry(dishR, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    const dishMat = new THREE.MeshStandardMaterial({
+      color: 0xeeeeee,
+      metalness: 0.8,
+      roughness: 0.2,
+      side: THREE.DoubleSide,
+    });
+    const dish = new THREE.Mesh(dishGeo, dishMat);
+    dish.position.set(busWidth * 0.25, busY + busHeight/2, busDepth * 0.15);
+    dish.rotation.x = -Math.PI / 2;
+    root.add(dish);
+
+    // Antenna mast
+    const mastH = busHeight * 0.3;
+    const mastGeo = new THREE.CylinderGeometry(T * 0.3, T * 0.3, mastH, 8);
+    const mastMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8, roughness: 0.3 });
+    const mast = new THREE.Mesh(mastGeo, mastMat);
+    mast.position.set(busWidth * 0.25, busY + busHeight/2 + mastH/2, busDepth * 0.15);
+    root.add(mast);
+
+    // Connecting strut from satellite to structure top
+    const strutMat = getMaterials()[MAT_ALU];
+    const strutTop = new THREE.Vector3(0, busY - busHeight/2, 0);
+    const strutBot = new THREE.Vector3(0, P1y, 0);
+    addTube(root, strutTop, strutBot, MAT_ALU, T * 1.5);
 
     return { group: root, c, theta, halfBeta, cellsToShow };
   }
@@ -816,25 +1024,29 @@ THREE_JS_VIEWER = r"""
   function disposeGroup(group) {
     group.traverse(ch => {
       if (ch.geometry) ch.geometry.dispose();
-      if (ch.material) ch.material.dispose();
     });
   }
 
   function initViewer(container) {
     const W = container.clientWidth, H = container.clientHeight;
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setSize(W, H);
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setClearColor(0x090b10, 1);
+    renderer.setClearColor(0x12141a, 1);
+    renderer.physicallyCorrectLights = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    renderer.outputEncoding = THREE.sRGBEncoding;
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-    const d1 = new THREE.DirectionalLight(0xffffff, 0.7);
+    scene.add(new THREE.HemisphereLight(0xc8d8f0, 0x303840, 0.6));
+    const d1 = new THREE.DirectionalLight(0xfff0e0, 1.2);
     d1.position.set(5, 8, 7); scene.add(d1);
-    const d2 = new THREE.DirectionalLight(0x6688cc, 0.3);
+    const d2 = new THREE.DirectionalLight(0xc0d0f0, 0.4);
     d2.position.set(-5, -4, 6); scene.add(d2);
-    scene.add(new THREE.AxesHelper(0.3));
+    const d3 = new THREE.DirectionalLight(0xe0e8ff, 0.3);
+    d3.position.set(0, -2, -8); scene.add(d3);
 
     const camera = new THREE.PerspectiveCamera(45, W / H, 0.001, 200);
     camera.userData.tgt = new THREE.Vector3(0, 0, 0);
@@ -877,25 +1089,47 @@ THREE_JS_VIEWER = r"""
     viewerState = { scene, renderer, camera, mouse, linkage: null, frame, container };
   }
 
-  function rebuildLinkage(sol, alphaFrac, showCells, thickness, hingePer) {
+  function rebuildLinkage(sol, alphaFrac, showCells, thickness, hingePer, showRefFrames) {
     if (!viewerState) return;
     const s = viewerState;
     if (s.linkage) { s.scene.remove(s.linkage); disposeGroup(s.linkage); }
 
     const alpha = (sol.alpha_stow || 0) + alphaFrac * ((sol.alpha_deploy || 1) - (sol.alpha_stow || 0));
+    const deployC = compute2D(sol.long, sol.offset, sol.alpha_deploy || 1).c;
+    const longeronLen = 0.5 * deployC;
     const { group, c } = buildScene(
       sol.long, sol.offset, alpha, sol.n_cells,
       thickness, sol.hinge_par, hingePer,
-      sol.short, sol.hinge_par, showCells
+      sol.short, sol.hinge_par, showCells, longeronLen, showRefFrames,
+      sol.width_actual || 0
     );
     s.linkage = group;
     s.scene.add(group);
     s.camera.userData.tgt = new THREE.Vector3(0, -c * Math.max(0, Math.min(showCells, sol.n_cells) - 1) / 2, 0);
   }
 
-  // ── Public API ──
+  // ── GIF recording ──
+  function captureFrame() {
+    if (!viewerState) return null;
+    const s = viewerState;
+    const t = s.camera.userData.tgt || new THREE.Vector3();
+    s.camera.position.set(
+      t.x + s.mouse.px + s.mouse.d * Math.sin(s.mouse.ry) * Math.cos(s.mouse.rx),
+      t.y + s.mouse.py + s.mouse.d * Math.sin(s.mouse.rx),
+      t.z + s.mouse.d * Math.cos(s.mouse.ry) * Math.cos(s.mouse.rx)
+    );
+    s.camera.lookAt(t.x + s.mouse.px, t.y + s.mouse.py, t.z);
+    s.renderer.setClearColor(0x000000, 0);
+    s.renderer.render(s.scene, s.camera);
+    const dataUrl = s.renderer.domElement.toDataURL("image/png");
+    s.renderer.setClearColor(0x12141a, 1);
+    return dataUrl;
+  }
+
   window.viewerInit = initViewer;
   window.viewerRebuild = rebuildLinkage;
+  window.viewerCaptureFrame = captureFrame;
+  window.getViewerState = function() { return viewerState; };
 })();
 """
 
@@ -903,15 +1137,6 @@ THREE_JS_VIEWER = r"""
 def make_interactive_plot(results, out_html="scissor_sweep.html",
                           actual_axes=("depth_actual", "height_actual"),
                           initial_mode="ratio"):
-    """
-    Interactive Plotly scatter with:
-      - Toggle: Extension ratios vs Actual axes
-      - Hover: thickness + offset + key vars
-      - Click: loads the 3D Three.js viewer with the selected solution
-
-    KEY FIX: customdata uses list-of-lists (not np.stack) to preserve
-    mixed types (floats + JSON strings).
-    """
     if pd is None or go is None or pio is None:
         raise RuntimeError(
             "plotly and pandas are required for interactive plots.\n"
@@ -961,7 +1186,6 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
     finite_actual = _finite(df[x_actual_key]) & _finite(df[y_actual_key])
     keep = finite_ratio | finite_actual
     df = df[keep].copy()
-    # Also filter payloads to match
     kept_indices = np.where(keep)[0]
     payloads = [payloads[i] for i in kept_indices]
     df = df.reset_index(drop=True)
@@ -973,10 +1197,6 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
 
     thickness_levels = sorted(df["thickness"].unique())
     fig = go.Figure()
-
-    # ── FIX: Build customdata as list-of-lists to avoid numpy dtype coercion ──
-    # customdata columns: [thickness, offset, n_cells, long, short, hinge_par, payload_index]
-    # payload_index references into the global payloads array embedded in JS.
 
     def hovertemplate():
         return (
@@ -990,13 +1210,11 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
             "hinge=%{customdata[5]:.4f}<extra></extra>"
         )
 
-    # 2 traces per thickness: ratio & actual
     for t in thickness_levels:
         mask = df["thickness"] == t
         dft = df[mask]
         original_indices = dft.index.tolist()
 
-        # Build customdata as a plain Python list-of-lists
         cd = []
         for idx in original_indices:
             cd.append([
@@ -1006,7 +1224,7 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
                 float(dft.loc[idx, "long"]),
                 float(dft.loc[idx, "short"]),
                 float(dft.loc[idx, "hinge_par"]),
-                int(idx),  # payload index
+                int(idx),
             ])
 
         fig.add_trace(go.Scatter(
@@ -1090,6 +1308,8 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
   <title>Scissor Linkage — Sweep + 3D Viewer</title>
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -1190,7 +1410,7 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
     }}
     .legend-row {{ font-size: 9px; line-height: 1.9; color: #666; }}
     .legend-row span.c {{ display: inline-block; width: 16px; text-align: center; }}
-    #exportBtn {{
+    #exportBtn, #gifBtn {{
       width: 100%;
       padding: 10px 0;
       background: linear-gradient(135deg, #c8b88a, #a89868);
@@ -1205,9 +1425,13 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       font-family: inherit;
       transition: opacity 0.2s;
     }}
-    #exportBtn:hover {{ opacity: 0.85; }}
-    #exportBtn:disabled {{ opacity: 0.3; cursor: not-allowed; }}
-    #exportStatus {{
+    #exportBtn:hover, #gifBtn:hover, #glbBtn:hover, #glbAnimBtn:hover {{ opacity: 0.85; }}
+    #exportBtn:disabled, #gifBtn:disabled, #glbBtn:disabled, #glbAnimBtn:disabled {{ opacity: 0.3; cursor: not-allowed; }}
+    #gifBtn {{
+      background: linear-gradient(135deg, #88aacc, #6688aa);
+      margin-top: 6px;
+    }}
+    #exportStatus, #gifStatus {{
       font-size: 9px;
       color: #44bb44;
       margin-top: 6px;
@@ -1223,11 +1447,6 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
     .csv-field label {{
       font-size: 10px;
       color: #888;
-    }}
-    .csv-field .val {{
-      font-size: 11px;
-      color: #c8b88a;
-      font-variant-numeric: tabular-nums;
     }}
     .csv-field input {{
       width: 70px;
@@ -1255,6 +1474,31 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
     #csvTable td {{
       border-bottom: 1px solid #0d0f14;
     }}
+    .gif-settings {{
+      display: flex;
+      gap: 8px;
+      margin-bottom: 6px;
+      align-items: center;
+    }}
+    .gif-settings label {{
+      font-size: 9px;
+      color: #666;
+    }}
+    .gif-settings input {{
+      width: 50px;
+      background: #090b10;
+      border: 1px solid #282b36;
+      border-radius: 3px;
+      color: #88aacc;
+      font-size: 10px;
+      font-family: inherit;
+      padding: 2px 4px;
+      text-align: right;
+    }}
+    .gif-settings input:focus {{
+      outline: none;
+      border-color: #88aacc;
+    }}
   </style>
 </head>
 <body>
@@ -1272,7 +1516,7 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       <div class="section">
         <h3>Deployment</h3>
         <div class="slider-row">
-          <label>α fraction</label>
+          <label>&alpha; fraction</label>
           <span id="alphaVal">70%</span>
         </div>
         <input type="range" id="alphaSlider" min="0.001" max="1" step="0.002" value="0.7" />
@@ -1296,20 +1540,50 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
           <label>Show cells</label>
           <span id="cellsVal">2</span>
         </div>
-        <input type="range" id="cellsSlider" min="1" max="20" step="1" value="2" />
+        <input type="range" id="cellsSlider" min="1" max="999" step="1" value="2" />
+      </div>
+      <div style="margin:6px 0;">
+        <label style="font-size:10px;color:#888;cursor:pointer;">
+          <input type="checkbox" id="refFrameToggle" style="vertical-align:middle;" />
+          Show reference frames
+        </label>
+      </div>
+      <div class="section">
+        <h3>Animation &amp; GIF Export</h3>
+        <div class="gif-settings">
+          <label>Frames</label>
+          <input type="number" id="gifFrames" value="60" min="10" max="300" />
+          <label>Delay (ms)</label>
+          <input type="number" id="gifDelay" value="33" min="10" max="200" />
+        </div>
+        <button id="gifBtn" disabled>Record Deployment GIF</button>
+        <div id="gifStatus"></div>
+      </div>
+      <div class="section">
+        <h3>3D Export</h3>
+        <button id="glbBtn" disabled style="width:100%;padding:10px 0;background:linear-gradient(135deg,#6a9f5b,#4a7f3b);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:opacity 0.2s;">Export .GLB (current frame)</button>
+        <div id="glbStatus" style="font-size:9px;color:#44bb44;margin-top:6px;min-height:14px;"></div>
+        <div style="margin-top:8px;">
+          <div class="gif-settings">
+            <label>Frames</label>
+            <input type="number" id="glbAnimFrames" value="30" min="2" max="120" style="width:50px;background:#090b10;border:1px solid #282b36;border-radius:3px;color:#6a9f5b;font-size:10px;font-family:inherit;padding:2px 4px;text-align:right;" />
+          </div>
+          <button id="glbAnimBtn" disabled style="width:100%;padding:10px 0;background:linear-gradient(135deg,#5b8f9f,#3b6f7f);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:opacity 0.2s;margin-top:6px;">Export Animation .ZIP</button>
+          <div id="glbAnimStatus" style="font-size:9px;color:#44bb44;margin-top:6px;min-height:14px;"></div>
+        </div>
       </div>
       <div class="section">
         <h3>Legend</h3>
-        <div class="legend-row"><span class="c" style="color:#2255cc">━━</span> long arms</div>
-        <div class="legend-row"><span class="c" style="color:#1d8c36">━━</span> short members</div>
-        <div class="legend-row"><span class="c" style="color:#c4164a">━━</span> offset (last cell)</div>
-        <div class="legend-row"><span class="c" style="color:#999">━━</span> hinge (grey)</div>
-        <div class="legend-row"><span class="c" style="color:#44bb44">━━</span> short hinges</div>
-        <div class="legend-row"><span class="c" style="color:#cc2255">━━</span> longerons</div>
-        <div style="font-size:8px;color:#444;margin-top:6px;">L-drag: orbit · R-drag: pan · Scroll: zoom</div>
+        <div class="legend-row"><span class="c" style="color:#2255cc">&mdash;</span> long arms</div>
+        <div class="legend-row"><span class="c" style="color:#1d8c36">&mdash;</span> short members</div>
+        <div class="legend-row"><span class="c" style="color:#c4164a">&mdash;</span> offset (last cell)</div>
+        <div class="legend-row"><span class="c" style="color:#999">&mdash;</span> hinge (grey)</div>
+        <div class="legend-row"><span class="c" style="color:#44bb44">&mdash;</span> short hinges</div>
+        <div class="legend-row"><span class="c" style="color:#cc2255">&mdash;</span> longerons</div>
+        <div style="font-size:8px;color:#444;margin-top:6px;">L-drag: orbit &middot; R-drag: pan &middot; Scroll: zoom</div>
       </div>
       <div class="section">
-        <h3>Export to CAD CSV (rounded + re-solved)</h3>
+        <h3>Export to CAD CSV (rounded)</h3>
         <div id="roundedStatus" style="font-size:9px;margin-bottom:6px;min-height:14px;"></div>
         <table id="csvTable" style="width:100%;border-collapse:collapse;font-size:10px;">
           <thead>
@@ -1356,6 +1630,16 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
     let currentSol = null;
     let viewerReady = false;
 
+    // ── Dark mode for plot ──
+    Object.assign(fig.layout, {{
+      paper_bgcolor: "#090b10",
+      plot_bgcolor: "#0d0f14",
+      font: {{ color: "#ccc", family: "'JetBrains Mono', monospace" }},
+    }});
+    if (fig.layout.xaxis) Object.assign(fig.layout.xaxis, {{ gridcolor: "#1f222b", zerolinecolor: "#1f222b", color: "#888" }});
+    if (fig.layout.yaxis) Object.assign(fig.layout.yaxis, {{ gridcolor: "#1f222b", zerolinecolor: "#1f222b", color: "#888" }});
+    if (fig.layout.legend) Object.assign(fig.layout.legend, {{ bgcolor: "rgba(0,0,0,0)", font: {{ color: "#999" }} }});
+
     // ── Plot ──
     Plotly.newPlot("plotDiv", fig.data, fig.layout, {{ responsive: true }});
 
@@ -1369,10 +1653,8 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       currentSol = payload.solution;
       currentPayload = payload;
 
-      // Show JSON
       document.getElementById("jsonPanel").textContent = JSON.stringify(payload, null, 2);
 
-      // Update overlay
       const ov = document.getElementById("viewerOverlay");
       ov.style.display = "block";
       document.getElementById("overlayContent").innerHTML =
@@ -1381,21 +1663,24 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
         '<div class="kv"><span class="k">offset</span><span class="v">' + currentSol.offset.toFixed(4) + '</span></div>' +
         '<div class="kv"><span class="k">hinge_par</span><span class="v">' + currentSol.hinge_par.toFixed(4) + '</span></div>' +
         '<div class="kv"><span class="k">n_cells</span><span class="v">' + currentSol.n_cells + '</span></div>' +
-        '<div class="kv"><span class="k">α deploy</span><span class="v">' + (currentSol.alpha_deploy * 180/Math.PI).toFixed(1) + '°</span></div>' +
+        '<div class="kv"><span class="k">&alpha; deploy</span><span class="v">' + (currentSol.alpha_deploy * 180/Math.PI).toFixed(1) + '&deg;</span></div>' +
         '<div class="kv"><span class="k">thickness</span><span class="v">' + currentSol.thickness.toFixed(3) + '</span></div>';
 
-      // Update cells slider max
       document.getElementById("cellsSlider").max = currentSol.n_cells;
       if (parseInt(document.getElementById("cellsSlider").value) > currentSol.n_cells) {{
         document.getElementById("cellsSlider").value = Math.min(2, currentSol.n_cells);
       }}
 
-      // Init 3D viewer if not yet
       if (!viewerReady) {{
         document.getElementById("placeholder3d").style.display = "none";
         window.viewerInit(document.getElementById("viewerMount"));
         viewerReady = true;
       }}
+
+      // Enable GIF + GLB buttons
+      document.getElementById("gifBtn").disabled = false;
+      document.getElementById("glbBtn").disabled = false;
+      document.getElementById("glbAnimBtn").disabled = false;
 
       rebuildFromUI();
       updateCsvPreview();
@@ -1407,7 +1692,8 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       const thickness = parseFloat(document.getElementById("thicknessSlider").value);
       const hingePer = parseFloat(document.getElementById("hingePerSlider").value);
       const showCells = parseInt(document.getElementById("cellsSlider").value);
-      window.viewerRebuild(currentSol, alphaFrac, showCells, thickness, hingePer);
+      const showRefFrames = document.getElementById("refFrameToggle").checked;
+      window.viewerRebuild(currentSol, alphaFrac, showCells, thickness, hingePer, showRefFrames);
     }}
 
     // ── Sliders ──
@@ -1422,6 +1708,292 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
     document.getElementById("cellsSlider").addEventListener("input", function() {{
       document.getElementById("cellsVal").textContent = this.value;
       rebuildFromUI();
+    }});
+    document.getElementById("refFrameToggle").addEventListener("change", function() {{
+      rebuildFromUI();
+    }});
+
+    // ── GLB Export ──
+    document.getElementById("glbBtn").addEventListener("click", function() {{
+      var viewerState = window.getViewerState();
+      if (!viewerState || !viewerState.linkage) return;
+      const statusEl = document.getElementById("glbStatus");
+      statusEl.textContent = "Exporting...";
+      statusEl.style.color = "#44bb44";
+      const exporter = new THREE.GLTFExporter();
+      exporter.parse(viewerState.linkage, function(result) {{
+        const blob = new Blob([result], {{ type: "application/octet-stream" }});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "scissor_linkage.glb";
+        a.click();
+        URL.revokeObjectURL(url);
+        statusEl.textContent = "Downloaded scissor_linkage.glb";
+        setTimeout(function() {{ statusEl.textContent = ""; }}, 3000);
+      }}, {{ binary: true }});
+    }});
+
+    // ── Animated GLB ZIP Export ──
+    document.getElementById("glbAnimBtn").addEventListener("click", async function() {{
+      if (!currentSol || !viewerReady) return;
+      const btn = this;
+      const statusEl = document.getElementById("glbAnimStatus");
+      btn.disabled = true;
+      btn.textContent = "Exporting...";
+      statusEl.textContent = "";
+      statusEl.style.color = "#44bb44";
+
+      const nFrames = parseInt(document.getElementById("glbAnimFrames").value) || 30;
+      const thickness = parseFloat(document.getElementById("thicknessSlider").value);
+      const hingePer = parseFloat(document.getElementById("hingePerSlider").value);
+      const showCells = parseInt(document.getElementById("cellsSlider").value);
+      const showRefFrames = document.getElementById("refFrameToggle").checked;
+      const exporter = new THREE.GLTFExporter();
+      const zip = new JSZip();
+
+      function exportFrame(frac) {{
+        return new Promise(function(resolve) {{
+          window.viewerRebuild(currentSol, frac, showCells, thickness, hingePer, showRefFrames);
+          var vs = window.getViewerState();
+          exporter.parse(vs.linkage, function(result) {{
+            resolve(result);
+          }}, {{ binary: true }});
+        }});
+      }}
+
+      try {{
+        for (let i = 0; i < nFrames; i++) {{
+          const frac = i / (nFrames - 1);
+          statusEl.textContent = "Frame " + (i + 1) + " / " + nFrames;
+          const glb = await exportFrame(frac);
+          const padded = String(i).padStart(4, "0");
+          zip.file("frame_" + padded + ".glb", glb);
+        }}
+
+        // Add Blender import script
+        const blenderScript = `import bpy
+import os
+import glob
+
+# ── Scissor Linkage Animation Importer ──
+# Run this script in Blender's Scripting workspace.
+# Set FOLDER to the directory where you extracted the .glb frames.
+
+FOLDER = r"/path/to/extracted/frames"  # <-- EDIT THIS
+FPS = 24
+
+# Find all frame GLB files
+files = sorted(glob.glob(os.path.join(FOLDER, "frame_*.glb")))
+if not files:
+    raise FileNotFoundError(f"No frame_*.glb files found in {{FOLDER}}")
+
+n_frames = len(files)
+print(f"Importing {{n_frames}} frames...")
+
+bpy.context.scene.render.fps = FPS
+bpy.context.scene.frame_start = 1
+bpy.context.scene.frame_end = n_frames
+
+# Import each frame, hide on non-active frames
+collections = []
+for i, filepath in enumerate(files):
+    frame_num = i + 1
+    col_name = f"Frame_{{frame_num:04d}}"
+    col = bpy.data.collections.new(col_name)
+    bpy.context.scene.collection.children.link(col)
+
+    # Set active collection for import
+    layer_collection = bpy.context.view_layer.layer_collection.children[col_name]
+    bpy.context.view_layer.active_layer_collection = layer_collection
+
+    bpy.ops.import_scene.gltf(filepath=filepath)
+
+    # Move imported objects to our collection
+    for obj in bpy.context.selected_objects:
+        for old_col in obj.users_collection:
+            old_col.objects.unlink(obj)
+        col.objects.link(obj)
+
+    collections.append(col)
+
+# Keyframe visibility: each collection visible only on its frame
+for i, col in enumerate(collections):
+    frame_num = i + 1
+    for obj in col.all_objects:
+        # Hide on all frames by default
+        obj.hide_viewport = True
+        obj.hide_render = True
+        obj.keyframe_insert("hide_viewport", frame=1)
+        obj.keyframe_insert("hide_render", frame=1)
+
+        # Show on this frame
+        obj.hide_viewport = False
+        obj.hide_render = False
+        obj.keyframe_insert("hide_viewport", frame=frame_num)
+        obj.keyframe_insert("hide_render", frame=frame_num)
+
+        # Hide again on next frame
+        if frame_num < n_frames:
+            obj.hide_viewport = True
+            obj.hide_render = True
+            obj.keyframe_insert("hide_viewport", frame=frame_num + 1)
+            obj.keyframe_insert("hide_render", frame=frame_num + 1)
+
+        # Set interpolation to constant (step) for hide properties
+        if obj.animation_data and obj.animation_data.action:
+            for fc in obj.animation_data.action.fcurves:
+                for kp in fc.keyframe_points:
+                    kp.interpolation = 'CONSTANT'
+
+bpy.context.scene.frame_set(1)
+print(f"Done! {{n_frames}} frames imported. Press Space to play.")
+`;
+        zip.file("import_animation.py", blenderScript);
+
+        statusEl.textContent = "Compressing ZIP...";
+        const blob = await zip.generateAsync({{ type: "blob" }});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "scissor_animation.zip";
+        a.click();
+        URL.revokeObjectURL(url);
+        statusEl.textContent = "Downloaded scissor_animation.zip (" + nFrames + " frames)";
+      }} catch (err) {{
+        statusEl.textContent = "Error: " + err.message;
+        statusEl.style.color = "#f87171";
+      }}
+
+      // Restore current slider position
+      rebuildFromUI();
+      btn.disabled = false;
+      btn.textContent = "Export Animation .ZIP";
+    }});
+
+    // ── GIF Recording ──
+    let gifRecording = false;
+    let gifWorkerBlobUrl = null;
+
+    // Pre-fetch the gif.js worker source and create a blob URL to avoid cross-origin Worker restriction
+    async function ensureGifWorker() {{
+      if (gifWorkerBlobUrl) return gifWorkerBlobUrl;
+      const resp = await fetch("https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js");
+      const text = await resp.text();
+      const blob = new Blob([text], {{ type: "application/javascript" }});
+      gifWorkerBlobUrl = URL.createObjectURL(blob);
+      return gifWorkerBlobUrl;
+    }}
+
+    // Also need the gif.js library itself
+    async function loadGifJs() {{
+      if (window.GIF) return;
+      return new Promise((resolve, reject) => {{
+        const s = document.createElement("script");
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js";
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      }});
+    }}
+
+    document.getElementById("gifBtn").addEventListener("click", async function() {{
+      if (!currentSol || !viewerReady || gifRecording) return;
+      gifRecording = true;
+      const btn = this;
+      const statusEl = document.getElementById("gifStatus");
+      btn.disabled = true;
+      btn.textContent = "Recording...";
+      statusEl.textContent = "Loading encoder...";
+      statusEl.style.color = "#88aacc";
+      statusEl.style.opacity = 1;
+
+      try {{
+        await loadGifJs();
+        const workerUrl = await ensureGifWorker();
+
+        const nFrames = parseInt(document.getElementById("gifFrames").value) || 60;
+        const delay = parseInt(document.getElementById("gifDelay").value) || 33;
+        const thickness = parseFloat(document.getElementById("thicknessSlider").value);
+        const hingePer = parseFloat(document.getElementById("hingePerSlider").value);
+        const showCells = parseInt(document.getElementById("cellsSlider").value);
+        const showRefFrames = document.getElementById("refFrameToggle").checked;
+
+        // Collect PNG frames
+        const frames = [];
+        for (let f = 0; f <= nFrames; f++) {{
+          const frac = f / nFrames;
+          window.viewerRebuild(currentSol, frac, showCells, thickness, hingePer, showRefFrames);
+          const dataUrl = window.viewerCaptureFrame();
+          if (dataUrl) frames.push(dataUrl);
+          statusEl.textContent = "Capturing frame " + (f + 1) + " / " + (nFrames + 1);
+          await new Promise(r => setTimeout(r, 10));
+        }}
+
+        statusEl.textContent = "Encoding GIF (" + frames.length + " frames)...";
+
+        const firstImg = new Image();
+        await new Promise((resolve) => {{
+          firstImg.onload = resolve;
+          firstImg.src = frames[0];
+        }});
+        const W = firstImg.naturalWidth;
+        const H = firstImg.naturalHeight;
+
+        const gif = new GIF({{
+          workers: 2,
+          workerScript: workerUrl,
+          width: W,
+          height: H,
+          transparent: 0x000000,
+          quality: 10,
+        }});
+
+        for (let i = 0; i < frames.length; i++) {{
+          const img = new Image();
+          await new Promise((resolve) => {{
+            img.onload = resolve;
+            img.src = frames[i];
+          }});
+          const cvs = document.createElement("canvas");
+          cvs.width = W; cvs.height = H;
+          const ctx = cvs.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          gif.addFrame(ctx, {{ copy: true, delay: delay }});
+        }}
+
+        gif.on("finished", function(blob) {{
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "scissor_deployment.gif";
+          a.style.display = "none";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          statusEl.textContent = "\\u2713 Exported scissor_deployment.gif (" + frames.length + " frames, transparent background)";
+          statusEl.style.color = "#44bb44";
+          btn.textContent = "Record Deployment GIF";
+          btn.disabled = false;
+          gifRecording = false;
+
+          rebuildFromUI();
+        }});
+
+        gif.on("progress", function(p) {{
+          statusEl.textContent = "Encoding GIF... " + Math.round(p * 100) + "%";
+        }});
+
+        gif.render();
+      }} catch (err) {{
+        statusEl.textContent = "\\u2716 GIF export failed: " + err.message;
+        statusEl.style.color = "#f87171";
+        btn.textContent = "Record Deployment GIF";
+        btn.disabled = false;
+        gifRecording = false;
+      }}
     }});
 
     // ── CSV Export ──
@@ -1448,15 +2020,14 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       const res = rd.residuals_mm || {{}};
 
       if (maxErr < 0.01) {{
-        statusEl.innerHTML = '<span style="color:#44bb44;">✓ Max rounding error: ' + maxErr.toFixed(6) + ' mm — negligible</span>';
+        statusEl.innerHTML = '<span style="color:#44bb44;">\\u2713 Max rounding error: ' + maxErr.toFixed(6) + ' mm \\u2014 negligible</span>';
       }} else if (maxErr < 0.1) {{
-        statusEl.innerHTML = '<span style="color:#c8b88a;">⚠ Max rounding error: ' + maxErr.toFixed(4) + ' mm — small</span>';
+        statusEl.innerHTML = '<span style="color:#c8b88a;">\\u26A0 Max rounding error: ' + maxErr.toFixed(4) + ' mm \\u2014 small</span>';
       }} else {{
-        statusEl.innerHTML = '<span style="color:#f87171;">⚠ Max rounding error: ' + maxErr.toFixed(4) + ' mm — review constraints below</span>';
+        statusEl.innerHTML = '<span style="color:#f87171;">\\u26A0 Max rounding error: ' + maxErr.toFixed(4) + ' mm \\u2014 review constraints below</span>';
       }}
       exportBtn.disabled = false;
 
-      // ── Rounded values table ──
       let html = '<tr style="color:#555;"><td colspan="3" style="padding:4px 4px 2px;font-size:8px;text-transform:uppercase;letter-spacing:1px;">Rounded Dimensions</td></tr>';
       const params = [
         ["Plate_Thickness", sol.thickness, rd.thickness],
@@ -1477,7 +2048,6 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
           '</tr>';
       }}
 
-      // ── Constraint residuals table ──
       html += '<tr><td colspan="3" style="border-top:1px solid #1f222b;padding:6px 4px 2px;font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#555;">Constraint Residuals</td></tr>';
       const resKeys = Object.keys(res);
       for (const key of resKeys) {{
@@ -1493,7 +2063,6 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
           '</tr>';
       }}
 
-      // ── Achieved dimensions ──
       if (rd.depth_stow !== undefined) {{
         html += '<tr><td colspan="3" style="border-top:1px solid #1f222b;padding:6px 4px 2px;font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#555;">Achieved Dimensions</td></tr>';
         const dimRows = [
@@ -1555,12 +2124,11 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       URL.revokeObjectURL(url);
 
       const status = document.getElementById("exportStatus");
-      status.textContent = "✓ Exported scissor_parameters.csv (rounded values)";
+      status.textContent = "\\u2713 Exported scissor_parameters.csv (rounded values)";
       status.style.opacity = 1;
       setTimeout(() => {{ status.style.opacity = 0; }}, 4000);
     }});
 
-    // Hook hinge slider to also update CSV preview
     document.getElementById("hingePerSlider").addEventListener("input", function() {{
       document.getElementById("hingePerVal").textContent = parseFloat(this.value).toFixed(4);
       rebuildFromUI();
