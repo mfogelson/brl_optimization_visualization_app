@@ -362,9 +362,11 @@ def compute_rounding_residuals(raw_result):
     }
 
 
-def sweep_offsets_and_thicknesses(args):
+def sweep_offsets_and_thicknesses(args, progress_callback=None):
     offsets = list(np.linspace(args.offset_min, args.offset_max, args.offset_steps))
     thicknesses = parse_thicknesses(args)
+    total = len(thicknesses) * len(offsets)
+    done = 0
 
     feasible = []
     for t in thicknesses:
@@ -381,7 +383,10 @@ def sweep_offsets_and_thicknesses(args):
                 r["rounded_solution"] = rounded
                 feasible.append(r)
             except Exception:
-                continue
+                pass
+            done += 1
+            if progress_callback:
+                progress_callback(done, total, len(feasible))
 
     # Summary
     if feasible:
@@ -931,7 +936,7 @@ THREE_JS_VIEWER = r"""
       });
       const panel = new THREE.Mesh(panelGeo, panelMat);
       // Position at top of structure (P1y-gy level), centered over deployed cells
-      panel.position.set(0, P1y-gy, -0.06);
+      panel.position.set(0, P1y - panelDepth / 2, -0.06);
       // Rotate to lie flat in XY plane (default PlaneGeometry is in XY, we want XY)
       root.add(panel);
 
@@ -941,7 +946,7 @@ THREE_JS_VIEWER = r"""
       const nGridY = Math.max(2, Math.round(panelDepth / (T * 20)));
       for (let gx = 0; gx <= nGridX; gx++) {
         const x = -panelWidth/2 + gx * panelWidth / nGridX;
-        const pts = [new THREE.Vector3(x, P1y-gy, -0.061), new THREE.Vector3(x, P1y - panelDepth, 0.001)];
+        const pts = [new THREE.Vector3(x, P1y, -0.061), new THREE.Vector3(x, P1y - panelDepth, 0.001)];
         const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
         root.add(new THREE.Line(lineGeo, gridMat));
       }
