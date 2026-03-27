@@ -1194,10 +1194,10 @@ THREE_JS_VIEWER = r"""
 def make_interactive_plot(results, out_html="scissor_sweep.html",
                           actual_axes=("depth_actual", "height_actual"),
                           initial_mode="ratio"):
-    if pd is None or go is None or pio is None:
+    if pd is None:
         raise RuntimeError(
-            "plotly and pandas are required for interactive plots.\n"
-            "Install with: pip install plotly pandas"
+            "pandas is required for interactive plots.\n"
+            "Install with: pip install pandas"
         )
 
     axis_label = {
@@ -1252,111 +1252,8 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
 
     print(f"[plot] Plotting {len(df)} points (after filtering non-finite).")
 
-    thickness_levels = sorted(df["thickness"].unique())
-    fig = go.Figure()
-
-    def hovertemplate():
-        return (
-            "x=%{x:.4f}<br>"
-            "y=%{y:.4f}<br>"
-            "thickness=%{customdata[0]:.3f}<br>"
-            "offset=%{customdata[1]:.5f}<br>"
-            "n_cells=%{customdata[2]}<br>"
-            "long=%{customdata[3]:.4f}<br>"
-            "short=%{customdata[4]:.4f}<br>"
-            "hinge=%{customdata[5]:.4f}<extra></extra>"
-        )
-
-    for t in thickness_levels:
-        mask = df["thickness"] == t
-        dft = df[mask]
-        original_indices = dft.index.tolist()
-
-        cd = []
-        for idx in original_indices:
-            cd.append([
-                float(dft.loc[idx, "thickness"]),
-                float(dft.loc[idx, "offset"]),
-                int(dft.loc[idx, "n_cells"]),
-                float(dft.loc[idx, "long"]),
-                float(dft.loc[idx, "short"]),
-                float(dft.loc[idx, "hinge_par"]),
-                int(idx),
-            ])
-
-        fig.add_trace(go.Scatter(
-            x=dft["er_len"].tolist(),
-            y=dft["er_hgt"].tolist(),
-            mode="markers",
-            name=f"t={t:.3f}",
-            customdata=cd,
-            hovertemplate=hovertemplate(),
-            visible=True if initial_mode == "ratio" else False,
-            marker=dict(size=8),
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=dft[x_actual_key].tolist(),
-            y=dft[y_actual_key].tolist(),
-            mode="markers",
-            name=f"t={t:.3f}",
-            customdata=cd,
-            hovertemplate=hovertemplate(),
-            visible=True if initial_mode == "actual" else False,
-            marker=dict(size=8),
-        ))
-
-    n_traces = len(fig.data)
-    vis_ratio = [False] * n_traces
-    vis_actual = [False] * n_traces
-    for i in range(len(thickness_levels)):
-        vis_ratio[2 * i] = True
-        vis_actual[2 * i + 1] = True
-
-    ratio_x_title = axis_label["er_len"]
-    ratio_y_title = axis_label["er_hgt"]
-    actual_x_title = axis_label.get(x_actual_key, x_actual_key)
-    actual_y_title = axis_label.get(y_actual_key, y_actual_key)
-
-    x_title = actual_x_title if initial_mode == "actual" else ratio_x_title
-    y_title = actual_y_title if initial_mode == "actual" else ratio_y_title
-
-    fig.update_layout(
-        title="Scissor sweep — click a point to visualize in 3D",
-        xaxis_title=x_title,
-        yaxis_title=y_title,
-        updatemenus=[dict(
-            type="buttons",
-            direction="left",
-            x=0.0,
-            y=1.15,
-            buttons=[
-                dict(
-                    label="Extension ratios",
-                    method="update",
-                    args=[
-                        {"visible": vis_ratio},
-                        {"xaxis": {"title": ratio_x_title},
-                         "yaxis": {"title": ratio_y_title}},
-                    ],
-                ),
-                dict(
-                    label=f"Actual ({actual_x_title} vs {actual_y_title})",
-                    method="update",
-                    args=[
-                        {"visible": vis_actual},
-                        {"xaxis": {"title": actual_x_title},
-                         "yaxis": {"title": actual_y_title}},
-                    ],
-                ),
-            ],
-        )],
-        legend_title="Thickness [m]",
-        margin=dict(t=90),
-    )
-
-    fig_json = pio.to_json(fig)
     payloads_json = json.dumps(payloads)
+    rows_json = df.to_json(orient='records')
 
     html = f"""<!doctype html>
 <html>
@@ -1387,7 +1284,8 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       border-right: 1px solid #1f222b;
       border-bottom: 1px solid #1f222b;
     }}
-    #plotDiv {{ width: 100%; height: 100%; }}
+    #plotArea {{ display: flex; flex-direction: column; }}
+    #plotDiv {{ width: 100%; flex: 1; min-height: 0; }}
     #viewerArea {{
       grid-column: 2;
       grid-row: 1 / 3;
@@ -1556,11 +1454,103 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       outline: none;
       border-color: #88aacc;
     }}
+    .plot-controls {{
+      display: flex;
+      gap: 12px;
+      padding: 10px 14px;
+      background: #0d0f14;
+      border-bottom: 1px solid #1f222b;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
+    .plot-controls .ctrl-group {{
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }}
+    .plot-controls label {{
+      font-size: 10px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      white-space: nowrap;
+    }}
+    .plot-controls select {{
+      background: #12141c;
+      border: 1px solid #1f222b;
+      border-radius: 4px;
+      color: #e0e0e0;
+      padding: 5px 8px;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      min-width: 140px;
+    }}
+    .plot-controls select:focus {{
+      outline: none;
+      border-color: #3a7bd5;
+    }}
+    .plot-controls select:hover {{
+      border-color: #2a3a5a;
+    }}
   </style>
 </head>
 <body>
   <div id="app">
-    <div id="plotArea"><div id="plotDiv"></div></div>
+    <div id="plotArea">
+      <div class="plot-controls">
+        <div class="ctrl-group">
+          <label for="xSelect">X Axis</label>
+          <select id="xSelect">
+            <option value="er_len">Extension ratio (length)</option>
+            <option value="er_hgt">Extension ratio (height)</option>
+            <option value="depth_actual">Deployed depth (m)</option>
+            <option value="height_actual">Deployed height (m)</option>
+            <option value="width_actual">Stowed width (m)</option>
+            <option value="thickness">Thickness (m)</option>
+            <option value="offset">Offset (m)</option>
+            <option value="n_cells">Number of cells</option>
+            <option value="long">Long link (m)</option>
+            <option value="short">Short link (m)</option>
+            <option value="hinge_par">Hinge parameter (m)</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label for="ySelect">Y Axis</label>
+          <select id="ySelect">
+            <option value="er_hgt">Extension ratio (height)</option>
+            <option value="er_len">Extension ratio (length)</option>
+            <option value="depth_actual">Deployed depth (m)</option>
+            <option value="height_actual">Deployed height (m)</option>
+            <option value="width_actual">Stowed width (m)</option>
+            <option value="thickness">Thickness (m)</option>
+            <option value="offset">Offset (m)</option>
+            <option value="n_cells">Number of cells</option>
+            <option value="long">Long link (m)</option>
+            <option value="short">Short link (m)</option>
+            <option value="hinge_par">Hinge parameter (m)</option>
+          </select>
+        </div>
+        <div class="ctrl-group">
+          <label for="seriesSelect">Color By</label>
+          <select id="seriesSelect">
+            <option value="thickness">Thickness</option>
+            <option value="offset">Offset</option>
+            <option value="n_cells">Number of cells</option>
+            <option value="long">Long link</option>
+            <option value="short">Short link</option>
+            <option value="hinge_par">Hinge parameter</option>
+            <option value="er_len">ER (length)</option>
+            <option value="er_hgt">ER (height)</option>
+            <option value="depth_actual">Deployed depth</option>
+            <option value="height_actual">Deployed height</option>
+            <option value="width_actual">Stowed width</option>
+            <option value="none">None (single color)</option>
+          </select>
+        </div>
+      </div>
+      <div id="plotDiv"></div>
+    </div>
     <div id="viewerArea">
       <div id="viewerMount"></div>
       <div id="placeholder3d">Click a point in the plot<br>to load the 3D viewer</div>
@@ -1709,24 +1699,152 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
   <script>
     // ── Data ──
     const ALL_PAYLOADS = {payloads_json};
-    const fig = {fig_json};
+    const ALL_ROWS = {rows_json};
+
+    const FIELD_LABELS = {{
+      er_len: "Extension ratio (length)",
+      er_hgt: "Extension ratio (height)",
+      depth_actual: "Deployed depth [m]",
+      height_actual: "Deployed height [m]",
+      width_actual: "Stowed width [m]",
+      thickness: "Thickness [m]",
+      offset: "Offset [m]",
+      n_cells: "Number of cells",
+      long: "Long link [m]",
+      short: "Short link [m]",
+      hinge_par: "Hinge parameter [m]",
+    }};
 
     // ── State ──
     let currentSol = null;
     let viewerReady = false;
 
-    // ── Dark mode for plot ──
-    Object.assign(fig.layout, {{
-      paper_bgcolor: "#090b10",
-      plot_bgcolor: "#0d0f14",
-      font: {{ color: "#ccc", family: "'JetBrains Mono', monospace" }},
-    }});
-    if (fig.layout.xaxis) Object.assign(fig.layout.xaxis, {{ gridcolor: "#1f222b", zerolinecolor: "#1f222b", color: "#888" }});
-    if (fig.layout.yaxis) Object.assign(fig.layout.yaxis, {{ gridcolor: "#1f222b", zerolinecolor: "#1f222b", color: "#888" }});
-    if (fig.layout.legend) Object.assign(fig.layout.legend, {{ bgcolor: "rgba(0,0,0,0)", font: {{ color: "#999" }} }});
+    // ── Dynamic plot rebuild ──
+    function getSeriesGroups(rows, seriesKey) {{
+      if (seriesKey === "none") {{
+        const indices = rows.map((_, i) => i);
+        return {{ "all": indices }};
+      }}
+      const vals = rows.map(r => r[seriesKey]);
+      const uniqueVals = [...new Set(vals)].sort((a, b) => a - b);
 
-    // ── Plot ──
-    Plotly.newPlot("plotDiv", fig.data, fig.layout, {{ responsive: true }});
+      if (uniqueVals.length <= 20) {{
+        const groups = {{}};
+        rows.forEach((r, i) => {{
+          const v = r[seriesKey];
+          const key = typeof v === "number" ? Number(v.toPrecision(4)) : String(v);
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(i);
+        }});
+        return groups;
+      }}
+
+      // Bucket into ~10 groups for continuous variables
+      const nBuckets = 10;
+      const min = uniqueVals[0], max = uniqueVals[uniqueVals.length - 1];
+      const range = max - min;
+      if (range === 0) {{
+        const indices = rows.map((_, i) => i);
+        return {{ [String(min)]: indices }};
+      }}
+      const step = range / nBuckets;
+      const groups = {{}};
+      rows.forEach((r, i) => {{
+        const v = r[seriesKey];
+        const bucket = Math.min(nBuckets - 1, Math.floor((v - min) / step));
+        const lo = parseFloat((min + bucket * step).toPrecision(3));
+        const hi = parseFloat((min + (bucket + 1) * step).toPrecision(3));
+        const key = lo + "-" + hi;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(i);
+      }});
+      return groups;
+    }}
+
+    function rebuildPlot() {{
+      const xKey = document.getElementById("xSelect").value;
+      const yKey = document.getElementById("ySelect").value;
+      const seriesKey = document.getElementById("seriesSelect").value;
+
+      const groups = getSeriesGroups(ALL_ROWS, seriesKey);
+      const sortedKeys = Object.keys(groups).sort((a, b) => {{
+        const na = parseFloat(a), nb = parseFloat(b);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.localeCompare(b);
+      }});
+
+      const traces = [];
+      for (const key of sortedKeys) {{
+        const indices = groups[key];
+        const xs = indices.map(i => ALL_ROWS[i][xKey]);
+        const ys = indices.map(i => ALL_ROWS[i][yKey]);
+        const cd = indices.map(i => [
+          ALL_ROWS[i].thickness,
+          ALL_ROWS[i].offset,
+          ALL_ROWS[i].n_cells,
+          ALL_ROWS[i].long,
+          ALL_ROWS[i].short,
+          ALL_ROWS[i].hinge_par,
+          i,  // payload index
+        ]);
+
+        const label = seriesKey === "none" ? "all" : key;
+        traces.push({{
+          x: xs,
+          y: ys,
+          mode: "markers",
+          name: seriesKey === "none" ? "All points" : (seriesKey + "=" + label),
+          customdata: cd,
+          hovertemplate:
+            FIELD_LABELS[xKey] + ": %{{x:.4f}}<br>" +
+            FIELD_LABELS[yKey] + ": %{{y:.4f}}<br>" +
+            "thickness=%{{customdata[0]:.3f}}<br>" +
+            "offset=%{{customdata[1]:.5f}}<br>" +
+            "n_cells=%{{customdata[2]}}<br>" +
+            "long=%{{customdata[3]:.4f}}<br>" +
+            "short=%{{customdata[4]:.4f}}<br>" +
+            "hinge=%{{customdata[5]:.4f}}<extra></extra>",
+          marker: {{ size: 8 }},
+        }});
+      }}
+
+      const legendTitle = seriesKey === "none" ? "" : FIELD_LABELS[seriesKey] || seriesKey;
+
+      const layout = {{
+        title: "Scissor sweep — click a point to visualize in 3D",
+        xaxis: {{
+          title: FIELD_LABELS[xKey] || xKey,
+          gridcolor: "#1f222b",
+          zerolinecolor: "#1f222b",
+          color: "#888",
+        }},
+        yaxis: {{
+          title: FIELD_LABELS[yKey] || yKey,
+          gridcolor: "#1f222b",
+          zerolinecolor: "#1f222b",
+          color: "#888",
+        }},
+        paper_bgcolor: "#090b10",
+        plot_bgcolor: "#0d0f14",
+        font: {{ color: "#ccc", family: "'JetBrains Mono', monospace" }},
+        legend: {{
+          title: {{ text: legendTitle }},
+          bgcolor: "rgba(0,0,0,0)",
+          font: {{ color: "#999" }},
+        }},
+        margin: {{ t: 50 }},
+      }};
+
+      Plotly.react("plotDiv", traces, layout, {{ responsive: true }});
+    }}
+
+    // ── Initial plot ──
+    rebuildPlot();
+
+    // ── Dropdown listeners ──
+    document.getElementById("xSelect").addEventListener("change", rebuildPlot);
+    document.getElementById("ySelect").addEventListener("change", rebuildPlot);
+    document.getElementById("seriesSelect").addEventListener("change", rebuildPlot);
 
     // ── Click handler ──
     document.getElementById("plotDiv").on("plotly_click", function(evt) {{
@@ -1742,14 +1860,24 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
 
       const ov = document.getElementById("viewerOverlay");
       ov.style.display = "block";
+      const s = currentSol;
+      const fmt = (v) => v !== undefined && v !== null ? v.toFixed(4) : "—";
       document.getElementById("overlayContent").innerHTML =
-        '<div class="kv"><span class="k">long</span><span class="v">' + currentSol.long.toFixed(4) + '</span></div>' +
-        '<div class="kv"><span class="k">short</span><span class="v">' + currentSol.short.toFixed(4) + '</span></div>' +
-        '<div class="kv"><span class="k">offset</span><span class="v">' + currentSol.offset.toFixed(4) + '</span></div>' +
-        '<div class="kv"><span class="k">hinge_par</span><span class="v">' + currentSol.hinge_par.toFixed(4) + '</span></div>' +
-        '<div class="kv"><span class="k">n_cells</span><span class="v">' + currentSol.n_cells + '</span></div>' +
-        '<div class="kv"><span class="k">&alpha; deploy</span><span class="v">' + (currentSol.alpha_deploy * 180/Math.PI).toFixed(1) + '&deg;</span></div>' +
-        '<div class="kv"><span class="k">thickness</span><span class="v">' + currentSol.thickness.toFixed(3) + '</span></div>';
+        '<div class="label" style="margin-top:4px;">Deployed</div>' +
+        '<div class="kv"><span class="k">depth</span><span class="v">' + fmt(s.depth_actual) + ' m</span></div>' +
+        '<div class="kv"><span class="k">height</span><span class="v">' + fmt(s.height_actual) + ' m</span></div>' +
+        '<div class="kv"><span class="k">width</span><span class="v">' + fmt(s.width_actual) + ' m</span></div>' +
+        '<div class="label" style="margin-top:6px;">Stowed</div>' +
+        '<div class="kv"><span class="k">depth</span><span class="v">' + fmt(s.depth_stow) + ' m</span></div>' +
+        '<div class="kv"><span class="k">width</span><span class="v">' + fmt(s.width_stow) + ' m</span></div>' +
+        '<div class="kv"><span class="k">height</span><span class="v">' + fmt(s.height_stow) + ' m</span></div>' +
+        '<div class="label" style="margin-top:6px;">Parameters</div>' +
+        '<div class="kv"><span class="k">n_cells</span><span class="v">' + s.n_cells + '</span></div>' +
+        '<div class="kv"><span class="k">thickness</span><span class="v">' + s.thickness.toFixed(3) + ' m</span></div>' +
+        '<div class="kv"><span class="k">long</span><span class="v">' + s.long.toFixed(4) + '</span></div>' +
+        '<div class="kv"><span class="k">short</span><span class="v">' + s.short.toFixed(4) + '</span></div>' +
+        '<div class="kv"><span class="k">offset</span><span class="v">' + s.offset.toFixed(4) + '</span></div>' +
+        '<div class="kv"><span class="k">hinge_par</span><span class="v">' + s.hinge_par.toFixed(4) + '</span></div>';
 
       document.getElementById("cellsSlider").max = currentSol.n_cells;
       if (parseInt(document.getElementById("cellsSlider").value) > currentSol.n_cells) {{
