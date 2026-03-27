@@ -34,7 +34,7 @@ FORM_HTML = """
       background: #090b10; color: #ccc;
       display: flex; justify-content: center; padding: 40px 20px;
     }
-    .container { max-width: 640px; width: 100%; }
+    .container { max-width: 700px; width: 100%; }
     h1 { color: #e0e0e0; font-size: 22px; margin-bottom: 8px; }
     .subtitle { color: #666; font-size: 12px; margin-bottom: 32px; }
     fieldset {
@@ -51,13 +51,19 @@ FORM_HTML = """
     }
     input:focus { outline: none; border-color: #3a7bd5; }
     .hint { color: #555; font-size: 11px; margin-left: 8px; flex-shrink: 0; }
+    .btn-row { display: flex; gap: 10px; margin-top: 8px; }
+    .btn-row button { flex: 1; }
     button {
-      width: 100%; padding: 14px; background: #3a7bd5; color: #fff;
+      padding: 14px; background: #3a7bd5; color: #fff;
       border: none; border-radius: 6px; font-size: 15px; font-family: inherit;
-      cursor: pointer; margin-top: 8px;
+      cursor: pointer;
     }
     button:hover { background: #4a8be5; }
     button:disabled { background: #2a3a5a; cursor: not-allowed; }
+    button.secondary {
+      background: #1a1d27; color: #aaa; border: 1px solid #1f222b;
+    }
+    button.secondary:hover { background: #22262f; color: #ccc; }
     #progress {
       margin-top: 20px; padding: 16px; background: #0d0f16;
       border: 1px solid #1f222b; border-radius: 8px; display: none;
@@ -71,6 +77,9 @@ FORM_HTML = """
     }
     #status { font-size: 13px; color: #aaa; }
     #error { color: #e55; margin-top: 12px; display: none; }
+    .io-row { display: flex; gap: 10px; margin-bottom: 20px; }
+    .io-row button { flex: 1; font-size: 13px; padding: 10px; }
+    #file-input { display: none; }
   </style>
 </head>
 <body>
@@ -78,20 +87,27 @@ FORM_HTML = """
     <h1>Scissor Linkage Optimizer</h1>
     <p class="subtitle">Enter parameters and run the sweep to find feasible solutions.</p>
 
+    <div class="io-row">
+      <button type="button" class="secondary" onclick="exportConstraints()">Export Constraints (JSON)</button>
+      <button type="button" class="secondary" onclick="document.getElementById('file-input').click()">Import Constraints (JSON)</button>
+      <input type="file" id="file-input" accept=".json,application/json" onchange="importConstraints(event)">
+    </div>
+
     <form id="form">
       <fieldset>
         <legend>Geometry</legend>
         <div class="field">
           <label for="stow_width">Stow width (m)</label>
-          <input type="number" id="stow_width" name="stow_width" step="any" value="1.0">
+          <input type="number" id="stow_width" name="stow_width" step="any" value="5.0">
         </div>
         <div class="field">
           <label for="stow_depth">Stow depth (m)</label>
-          <input type="number" id="stow_depth" name="stow_depth" step="any" value="2.0">
+          <input type="number" id="stow_depth" name="stow_depth" step="any" placeholder="auto">
+          <span class="hint">optional</span>
         </div>
         <div class="field">
           <label for="expanded_depth">Expanded depth (m)</label>
-          <input type="number" id="expanded_depth" name="expanded_depth" step="any" value="5.0">
+          <input type="number" id="expanded_depth" name="expanded_depth" step="any" value="70.0">
         </div>
         <div class="field">
           <label for="hinge_par">Hinge parameter</label>
@@ -106,14 +122,28 @@ FORM_HTML = """
       </fieldset>
 
       <fieldset>
+        <legend>Link lengths</legend>
+        <div class="field">
+          <label for="short">Short link (m)</label>
+          <input type="number" id="short" name="short" step="any" placeholder="auto">
+          <span class="hint">optional</span>
+        </div>
+        <div class="field">
+          <label for="long">Long link (m)</label>
+          <input type="number" id="long" name="long" step="any" placeholder="auto">
+          <span class="hint">optional</span>
+        </div>
+      </fieldset>
+
+      <fieldset>
         <legend>Offset sweep</legend>
         <div class="field">
           <label for="offset_min">Offset min</label>
-          <input type="number" id="offset_min" name="offset_min" step="any" value="0.001">
+          <input type="number" id="offset_min" name="offset_min" step="any" value="0.1">
         </div>
         <div class="field">
           <label for="offset_max">Offset max</label>
-          <input type="number" id="offset_max" name="offset_max" step="any" value="2.0">
+          <input type="number" id="offset_max" name="offset_max" step="any" value="1.0">
         </div>
         <div class="field">
           <label for="offset_steps">Offset steps</label>
@@ -130,11 +160,11 @@ FORM_HTML = """
         </div>
         <div class="field">
           <label for="thickness_min">Thickness min</label>
-          <input type="number" id="thickness_min" name="thickness_min" step="any" value="0.002">
+          <input type="number" id="thickness_min" name="thickness_min" step="any" value="0.01">
         </div>
         <div class="field">
           <label for="thickness_max">Thickness max</label>
-          <input type="number" id="thickness_max" name="thickness_max" step="any" value="0.05">
+          <input type="number" id="thickness_max" name="thickness_max" step="any" value="0.1">
         </div>
         <div class="field">
           <label for="thickness_steps">Thickness steps</label>
@@ -142,7 +172,9 @@ FORM_HTML = """
         </div>
       </fieldset>
 
-      <button type="submit" id="run-btn">Run Optimization</button>
+      <div class="btn-row">
+        <button type="submit" id="run-btn">Run Optimization</button>
+      </div>
     </form>
 
     <div id="progress">
@@ -153,6 +185,62 @@ FORM_HTML = """
   </div>
 
   <script>
+    const FORM_FIELDS = [
+      'stow_width', 'stow_depth', 'expanded_depth', 'hinge_par', 'n',
+      'short', 'long',
+      'offset_min', 'offset_max', 'offset_steps',
+      'thickness_list', 'thickness_min', 'thickness_max', 'thickness_steps'
+    ];
+
+    function getFormData() {
+      const data = {};
+      for (const key of FORM_FIELDS) {
+        const el = document.getElementById(key);
+        if (el && el.value !== '') {
+          data[key] = el.type === 'number' ? parseFloat(el.value) : el.value;
+        }
+      }
+      return data;
+    }
+
+    function setFormData(data) {
+      for (const key of FORM_FIELDS) {
+        const el = document.getElementById(key);
+        if (el && data[key] !== undefined && data[key] !== null) {
+          el.value = data[key];
+        } else if (el) {
+          el.value = '';
+        }
+      }
+    }
+
+    function exportConstraints() {
+      const data = getFormData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'scissor_constraints.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function importConstraints(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const data = JSON.parse(e.target.result);
+          setFormData(data);
+        } catch (err) {
+          alert('Invalid JSON file: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    }
+
     const form = document.getElementById('form');
     const btn = document.getElementById('run-btn');
     const progressDiv = document.getElementById('progress');
@@ -168,11 +256,7 @@ FORM_HTML = """
       statusEl.textContent = 'Submitting...';
       barEl.style.width = '0%';
 
-      const fd = new FormData(form);
-      const data = {};
-      for (const [k, v] of fd.entries()) {
-        data[k] = v;
-      }
+      const data = getFormData();
 
       try {
         const res = await fetch('/run', {
@@ -201,7 +285,7 @@ FORM_HTML = """
           } else if (d.status === 'done') {
             clearInterval(iv);
             barEl.style.width = '100%';
-            statusEl.textContent = `Done — ${d.feasible} feasible solutions found. Redirecting...`;
+            statusEl.textContent = `Done - ${d.feasible} feasible solutions found. Redirecting...`;
             setTimeout(() => { window.location.href = '/results/' + jobId; }, 500);
           } else if (d.status === 'error') {
             clearInterval(iv);
@@ -254,14 +338,14 @@ def run():
         hinge_par=_parse_float_or_none(data.get('hinge_par')),
         states=2,
         n=_parse_int_or_none(data.get('n')),
-        short=None,
-        long=None,
-        offset_min=float(data.get('offset_min', 0.001)),
-        offset_max=float(data.get('offset_max', 2.0)),
+        short=_parse_float_or_none(data.get('short')),
+        long=_parse_float_or_none(data.get('long')),
+        offset_min=float(data.get('offset_min', 0.1)),
+        offset_max=float(data.get('offset_max', 1.0)),
         offset_steps=int(data.get('offset_steps', 50)),
         thickness_list=data.get('thickness_list') or None,
-        thickness_min=float(data.get('thickness_min', 0.002)),
-        thickness_max=float(data.get('thickness_max', 0.05)),
+        thickness_min=float(data.get('thickness_min', 0.01)),
+        thickness_max=float(data.get('thickness_max', 0.1)),
         thickness_steps=int(data.get('thickness_steps', 8)),
         tee=False,
     )

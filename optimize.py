@@ -121,7 +121,7 @@ def build_model(stow_width, stow_depth, expanded_depth, n_states=2,
         return m.c_long[i] == m.c_short[i]
 
     if stow_width is not None:
-        m.width_limit = pyo.Constraint(expr=2 * m.b[1] + 4 * m.hinge_par == stow_width)
+        m.width_limit = pyo.Constraint(expr=2 * m.b[1] + 4 * m.hinge_par <= stow_width)
 
     if stow_depth is not None:
         m.stow_depth_limit = pyo.Constraint(expr=m.length[1] == stow_depth)
@@ -134,7 +134,7 @@ def build_model(stow_width, stow_depth, expanded_depth, n_states=2,
 
     m.initial_angle_beta = pyo.Constraint(expr=m.sb[1] == (m.thickness / 2.0) / m.short)
 
-    m.objective = pyo.Objective(expr=0.0, sense=pyo.minimize)
+    m.objective = pyo.Objective(expr=m.length[1], sense=pyo.minimize)
     return m
 
 
@@ -159,7 +159,9 @@ def solve_one(stow_width, stow_depth, expanded_depth, n_states=2,
 
     solver, solver_name = _pick_solver()
     res = solver.solve(model, tee=tee)
+    # import pdb; pdb.set_trace()
     term = res.solver.termination_condition
+
 
     ok_terms = {pyo.TerminationCondition.optimal,
                 pyo.TerminationCondition.locallyOptimal,
@@ -199,7 +201,7 @@ def solve_one(stow_width, stow_depth, expanded_depth, n_states=2,
             "short": float(value(model.short)),
             "offset": float(value(model.offset)),
             "hinge_par": float(value(model.hinge_par)),
-            "n_cells": 10, #int(round(value(model.n))),
+            "n_cells": int(round(value(model.n))),
             "alpha_stow": float(angle(model.sa[1], model.ca[1])),
             "alpha_deploy": float(angle(model.sa[n_states], model.ca[n_states])),
             "beta_stow": float(angle(model.sb[1], model.cb[1])),
@@ -218,7 +220,7 @@ def solve_one(stow_width, stow_depth, expanded_depth, n_states=2,
             "depth_deploy": float(value(model.length[n_states])),
             "thickness": float(value(model.thickness)),
 
-            "extension_ratio_length": float(value(model.length[n_states]) / value(model.thickness)),
+            "extension_ratio_length": float(value(model.length[n_states]) / (value(model.thickness)*value(model.n))),
             "extension_ratio_height": float(value(model.height[n_states]) / value(model.thickness * 8)),
 
             "height_stow": float(value(model.thickness * 8)),
@@ -367,26 +369,25 @@ def sweep_offsets_and_thicknesses(args, progress_callback=None):
     thicknesses = parse_thicknesses(args)
     total = len(thicknesses) * len(offsets)
     done = 0
-
+    #print args 
+    print(args)
     feasible = []
     for t in thicknesses:
-        for off in offsets:
-            try:
-                r = solve_one(
-                    args.stow_width, args.stow_depth, args.expanded_depth,
-                    args.states, args.hinge_par, float(t), args.n,
-                    args.short, args.long, float(off),
-                    tee=args.tee, debug_infeasible=False
-                )
-                # Compute rounding residuals (no re-solve, just arithmetic)
-                rounded = compute_rounding_residuals(r)
-                r["rounded_solution"] = rounded
-                feasible.append(r)
-            except Exception:
-                pass
-            done += 1
-            if progress_callback:
-                progress_callback(done, total, len(feasible))
+      for off in offsets:
+          try:
+        
+              r = solve_one(args.stow_width, args.stow_depth, args.expanded_depth, args.states, args.hinge_par, float(t), args.n, args.short, args.long, float(off), tee=args.tee, debug_infeasible=False)
+              # import pdb; pdb.set_trace()
+              # Compute rounding residuals (no re-solve, just arithmetic)
+              rounded = compute_rounding_residuals(r)
+              r["rounded_solution"] = rounded
+              feasible.append(r)
+          except Exception:
+              # import pdb; pdb.set_trace()
+              pass
+          done += 1
+          if progress_callback:
+              progress_callback(done, total, len(feasible))
 
     # Summary
     if feasible:
@@ -1131,10 +1132,61 @@ THREE_JS_VIEWER = r"""
     return dataUrl;
   }
 
+  // ── Keypoint overlay ──
+  let kpGroup = null;
+  const KP_COLORS = {
+    1:  0x2ca02c,  // green (short / layer 1)
+    '-1': 0xd62728, // red (layer -1)
+    2:  0x1f77b4,  // blue (long)
+    3:  0xd62728,  // red (offset)
+    0:  0x888888,
+  };
+
+  function buildKeypointGroup(kps, tubeRadius) {
+    const grp = new THREE.Group();
+    for (const kp of kps) {
+      const p1 = new THREE.Vector3(kp[0], -kp[1], kp[2]);
+      const p2 = new THREE.Vector3(kp[3], -kp[4], kp[5]);
+      const layer = kp[8] !== undefined ? kp[8] : 0;
+      const color = KP_COLORS[layer] || KP_COLORS[String(layer)] || 0x888888;
+      const dir = new THREE.Vector3().subVectors(p2, p1);
+      const len = dir.length();
+      if (len < 1e-6) continue;
+      const geo = new THREE.CylinderGeometry(tubeRadius, tubeRadius, len, 10);
+      const mat = new THREE.MeshStandardMaterial({ color, metalness: 0.4, roughness: 0.5, transparent: true, opacity: 0.85 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.addVectors(p1, p2).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      grp.add(mesh);
+      // Joint spheres
+      const ballGeo = new THREE.SphereGeometry(tubeRadius * 1.3, 8, 8);
+      const ballMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.3, roughness: 0.6 });
+      const b1 = new THREE.Mesh(ballGeo, ballMat); b1.position.copy(p1); grp.add(b1);
+      const b2 = new THREE.Mesh(ballGeo.clone(), ballMat.clone()); b2.position.copy(p2); grp.add(b2);
+    }
+    return grp;
+  }
+
+  function showKeypoints(kps, tubeRadius) {
+    if (!viewerState) return;
+    clearKeypoints();
+    kpGroup = buildKeypointGroup(kps, tubeRadius || 0.003);
+    viewerState.scene.add(kpGroup);
+  }
+
+  function clearKeypoints() {
+    if (!viewerState || !kpGroup) return;
+    viewerState.scene.remove(kpGroup);
+    disposeGroup(kpGroup);
+    kpGroup = null;
+  }
+
   window.viewerInit = initViewer;
   window.viewerRebuild = rebuildLinkage;
   window.viewerCaptureFrame = captureFrame;
   window.getViewerState = function() { return viewerState; };
+  window.viewerShowKeypoints = showKeypoints;
+  window.viewerClearKeypoints = clearKeypoints;
 })();
 """
 
@@ -1533,9 +1585,9 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
         <h3>Visualization</h3>
         <div class="slider-row">
           <label>Member thickness</label>
-          <span id="thicknessVal">0.006</span>
+          <span id="thicknessVal">0.05</span>
         </div>
-        <input type="range" id="thicknessSlider" min="0.001" max="0.025" step="0.0005" value="0.006" />
+        <input type="range" id="thicknessSlider" min="0.001" max="0.100" step="0.0005" value="0.006" />
         <div class="slider-row">
           <label>Hinge height</label>
           <span id="hingePerVal">0.08</span>
@@ -1616,6 +1668,34 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
         <div id="exportStatus"></div>
       </div>
       <div class="section">
+        <h3>Export Keypoints CSV</h3>
+        <div class="csv-field">
+          <label>Cross Width</label>
+          <div><input type="number" id="kpCrossWidth" value="0.1" step="0.01" min="0.001" /> <span style="font-size:9px;color:#555">m</span></div>
+        </div>
+        <div class="csv-field">
+          <label>Cross Height</label>
+          <div><input type="number" id="kpCrossHeight" value="0.1" step="0.01" min="0.001" /> <span style="font-size:9px;color:#555">m</span></div>
+        </div>
+        <div style="margin:8px 0 6px 0;">
+          <label style="font-size:10px;color:#888;cursor:pointer;">
+            <input type="checkbox" id="showPetKp" style="vertical-align:middle;" />
+            Show PET keypoints in 3D
+          </label>
+        </div>
+        <div style="margin-bottom:8px;">
+          <label style="font-size:10px;color:#888;cursor:pointer;">
+            <input type="checkbox" id="showDartKp" style="vertical-align:middle;" />
+            Show DART keypoints in 3D
+          </label>
+        </div>
+        <button id="exportPetBtn" disabled style="width:100%;padding:10px 0;background:linear-gradient(135deg,#9b59b6,#8e44ad);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:opacity 0.2s;">Export PET Keypoints CSV</button>
+        <div style="margin-top:6px;">
+          <button id="exportDartBtn" disabled style="width:100%;padding:10px 0;background:linear-gradient(135deg,#e67e22,#d35400);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:opacity 0.2s;">Export DART Keypoints CSV</button>
+        </div>
+        <div id="kpExportStatus" style="font-size:9px;color:#44bb44;margin-top:6px;min-height:14px;transition:opacity 0.3s;"></div>
+      </div>
+      <div class="section">
         <h3>Full JSON output</h3>
         <pre id="jsonPanel">Click a point to populate.</pre>
       </div>
@@ -1682,10 +1762,12 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
         viewerReady = true;
       }}
 
-      // Enable GIF + GLB buttons
+      // Enable GIF + GLB + keypoint buttons
       document.getElementById("gifBtn").disabled = false;
       document.getElementById("glbBtn").disabled = false;
       document.getElementById("glbAnimBtn").disabled = false;
+      document.getElementById("exportPetBtn").disabled = false;
+      document.getElementById("exportDartBtn").disabled = false;
 
       rebuildFromUI();
       updateCsvPreview();
@@ -1699,6 +1781,32 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       const showCells = parseInt(document.getElementById("cellsSlider").value);
       const showRefFrames = document.getElementById("refFrameToggle").checked;
       window.viewerRebuild(currentSol, alphaFrac, showCells, thickness, hingePer, showRefFrames);
+      rebuildKeypointOverlay();
+    }}
+
+    function rebuildKeypointOverlay() {{
+      if (!currentSol) {{ window.viewerClearKeypoints(); return; }}
+      const showPet = document.getElementById("showPetKp").checked;
+      const showDart = document.getElementById("showDartKp").checked;
+      if (!showPet && !showDart) {{ window.viewerClearKeypoints(); return; }}
+      const abt = getCurrentAlphaBetaTheta();
+      if (!abt) return;
+      const cw = parseFloat(document.getElementById("kpCrossWidth").value) || 0.1;
+      const ch = parseFloat(document.getElementById("kpCrossHeight").value) || 0.1;
+      const nCells = currentSol.n_cells;
+      const tubeR = parseFloat(document.getElementById("thicknessSlider").value) * 0.5;
+      const alpha_kp = Math.PI - abt.alpha;
+      const beta_kp = Math.PI - abt.beta;
+      let kps;
+      if (showPet) {{
+        const l1 = currentSol.short / 2;
+        const l2 = currentSol.offset;
+        const l3 = currentSol.long - currentSol.offset;
+        kps = getPetKeypoints(l1, l2, l3, alpha_kp, beta_kp, abt.theta, nCells, cw, ch, false);
+      }} else {{
+        kps = getDartKeypoints(currentSol.short, currentSol.long, currentSol.offset, currentSol.hinge_par, alpha_kp, beta_kp, abt.theta, nCells, cw, ch, false);
+      }}
+      window.viewerShowKeypoints(kps, tubeR);
     }}
 
     // ── Sliders ──
@@ -1716,6 +1824,16 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
     }});
     document.getElementById("refFrameToggle").addEventListener("change", function() {{
       rebuildFromUI();
+    }});
+
+    // ── Keypoint overlay checkboxes (mutually exclusive) ──
+    document.getElementById("showPetKp").addEventListener("change", function() {{
+      if (this.checked) document.getElementById("showDartKp").checked = false;
+      rebuildKeypointOverlay();
+    }});
+    document.getElementById("showDartKp").addEventListener("change", function() {{
+      if (this.checked) document.getElementById("showPetKp").checked = false;
+      rebuildKeypointOverlay();
     }});
 
     // ── GLB Export ──
@@ -2139,6 +2257,255 @@ print(f"Done! {{n_frames}} frames imported. Press Space to play.")
       rebuildFromUI();
       updateCsvPreview();
     }});
+
+    // ── Keypoint generation (ported from Python) ──
+    function getCurrentAlphaBetaTheta() {{
+      if (!currentSol) return null;
+      const alphaFrac = parseFloat(document.getElementById("alphaSlider").value);
+      const alpha = (currentSol.alpha_stow || 0) + alphaFrac * ((currentSol.alpha_deploy || 1) - (currentSol.alpha_stow || 0));
+      const L = currentSol.long;
+      const O = currentSol.offset;
+      const S = currentSol.short;
+      const h = currentSol.hinge_par;
+
+      // compute beta and theta same as buildScene
+      const ha = alpha / 2;
+      const LmO = L - O;
+      const c = 2 * LmO * Math.sin(ha);
+      const sb = S > 1e-6 ? Math.min(1, Math.max(0, c / (2 * S))) : 0;
+      const halfBeta = Math.asin(sb);
+      const beta = 2 * halfBeta;
+      const cb = Math.cos(halfBeta);
+      const b = S * cb;
+      const a = L * Math.cos(ha);
+      const num = (2 * a + 2 * h) ** 2;
+      const den = 2 * (b + 2 * h) ** 2;
+      let cosTheta = den > 1e-14 ? 1 - num / den : 1;
+      cosTheta = Math.max(-1, Math.min(1, cosTheta));
+      const theta = Math.acos(cosTheta);
+      return {{ alpha, beta, theta }};
+    }}
+
+    function matMul3(A, v) {{
+      return [
+        A[0][0]*v[0] + A[0][1]*v[1] + A[0][2]*v[2],
+        A[1][0]*v[0] + A[1][1]*v[1] + A[1][2]*v[2],
+        A[2][0]*v[0] + A[2][1]*v[1] + A[2][2]*v[2]
+      ];
+    }}
+
+    function rotZ3(angle) {{
+      const c = Math.cos(angle), s = Math.sin(angle);
+      return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
+    }}
+
+    function rotY3(angle) {{
+      const c = Math.cos(angle), s = Math.sin(angle);
+      return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
+    }}
+
+    function getScissorKeypoints(length, alpha, nCells, cw, ch, addEnds, addLongerons) {{
+      const rotZ = rotZ3(alpha / 2);
+      const rotZ_ = rotZ3(-alpha / 2);
+      const kps = [];
+      const front1Verts = [];
+      const front2Verts = [];
+      for (let n = 0; n < nCells; n++) {{
+        const cy = length * Math.cos(alpha / 2) * n;
+        const center = [0, cy, 0];
+        const back1 = matMul3(rotZ, [0, -length/2, 0]).map((v, i) => v + center[i]);
+        const front1 = matMul3(rotZ, [0, length/2, 0]).map((v, i) => v + center[i]);
+        const back2 = matMul3(rotZ_, [0, -length/2, 0]).map((v, i) => v + center[i]);
+        const front2 = matMul3(rotZ_, [0, length/2, 0]).map((v, i) => v + center[i]);
+        front1Verts.push(front1);
+        front2Verts.push(front2);
+        if (addEnds && n === 0) {{
+          const backCenter = [0, -length * Math.cos(alpha / 2), 0];
+          kps.push([...backCenter, ...back1, cw, ch, 1]);
+          kps.push([...backCenter, ...back2, cw, ch, -1]);
+        }}
+        kps.push([...back1, ...center, cw, ch, 1]);
+        kps.push([...center, ...front1, cw, ch, 1]);
+        kps.push([...back2, ...center, cw, ch, -1]);
+        kps.push([...center, ...front2, cw, ch, -1]);
+        if (addEnds && n === nCells - 1) {{
+          const frontCenter = [0, length * Math.cos(alpha / 2) * nCells, 0];
+          kps.push([...frontCenter, ...front1, cw, ch, 1]);
+          kps.push([...frontCenter, ...front2, cw, ch, -1]);
+        }}
+      }}
+      if (addLongerons) {{
+        for (let i = 0; i < front1Verts.length - 1; i++) {{
+          kps.push([...front1Verts[i], ...front1Verts[i+1], cw, ch, 1]);
+          kps.push([...front2Verts[i], ...front2Verts[i+1], cw, ch, -1]);
+        }}
+      }}
+      return kps;
+    }}
+
+    function getOffsetKeypoints(l2, l3, alpha, nCells, cw, ch) {{
+      const kps = [];
+      for (let i = 0; i < nCells; i++) {{
+        const yOff = 2 * l3 * Math.cos(alpha / 2) * i;
+        kps.push([
+          Math.sin(alpha/2)*l3, Math.cos(alpha/2)*l3 + yOff, 0,
+          Math.sin(alpha/2)*(l2+l3), Math.cos(alpha/2)*(l2+l3) + yOff, 0,
+          cw, ch, 1
+        ]);
+        kps.push([
+          Math.sin(-alpha/2)*l3, Math.cos(-alpha/2)*l3 + yOff, 0,
+          Math.sin(-alpha/2)*(l2+l3), Math.cos(-alpha/2)*(l2+l3) + yOff, 0,
+          cw, ch, -1
+        ]);
+      }}
+      return kps;
+    }}
+
+    function getFoldKeypoints(segLen, foldAngle, nSegments, cw, ch, layer) {{
+      const kps = [];
+      let pos = [0, 0, 0];
+      const direction = [0, 1, 0];
+      for (let i = 0; i < nSegments; i++) {{
+        const angle = (i % 2 === 0) ? foldAngle / 2 : -foldAngle / 2;
+        const rot = rotZ3(angle);
+        const segDir = matMul3(rot, direction);
+        const end = pos.map((v, j) => v + segLen * segDir[j]);
+        kps.push([...pos, ...end, cw, ch, layer]);
+        pos = end;
+      }}
+      return kps;
+    }}
+
+    function transformFoldMembers(kps, centerOffset, jointOffset, theta) {{
+      const R = rotY3(theta);
+      for (const kp of kps) {{
+        for (let i = 0; i < 2; i++) {{
+          const v = [kp[3*i] - centerOffset[0], kp[3*i+1] - centerOffset[1], kp[3*i+2] - centerOffset[2]];
+          const rv = matMul3(R, v);
+          kp[3*i]   = rv[0] + jointOffset[0];
+          kp[3*i+1] = rv[1] + jointOffset[1];
+          kp[3*i+2] = rv[2] + jointOffset[2];
+        }}
+      }}
+      return kps;
+    }}
+
+    function getPetKeypoints(l1, l2, l3, alpha_kp, beta_kp, theta, nCells, cw, ch, addEnds) {{
+      // alpha_kp, beta_kp are already in keypoint convention (pi - model angle)
+      // PET uses scissors on ALL sides (not folds)
+      const kps = [];
+      let shortLeft = getScissorKeypoints(2*l1, beta_kp, nCells, cw, ch, false, false);
+      let shortRight = getScissorKeypoints(2*l1, beta_kp, nCells, cw, ch, false, false);
+      // Flip layer tags: left = 1, right = -1
+      for (const k of shortLeft) k[8] = 1;
+      for (const k of shortRight) k[8] = -1;
+
+      let jointL = [Math.sin(alpha_kp/2)*(l2+l3), Math.cos(alpha_kp/2)*(l2+l3), 0];
+      let centerOff = [0, 0, 0];
+      shortLeft = transformFoldMembers(shortLeft, centerOff, jointL, -(Math.PI/2 + theta/2));
+
+      let jointR = [-Math.sin(alpha_kp/2)*(l2+l3), Math.cos(alpha_kp/2)*(l2+l3), 0];
+      shortRight = transformFoldMembers(shortRight, centerOff, jointR, (Math.PI/2 + theta/2));
+
+      const longKps = getScissorKeypoints(2*l3, alpha_kp, nCells, cw, ch, addEnds, true);
+      const offsetKps = getOffsetKeypoints(l2, l3, alpha_kp, nCells, cw, ch);
+
+      kps.push(longKps[0]);
+      kps.push(...shortLeft);
+      kps.push(...shortRight);
+      kps.push(...longKps.slice(1, -1));
+      kps.push(...offsetKps);
+      kps.push(longKps[longKps.length - 1]);
+      return kps;
+    }}
+
+    function getDartKeypoints(short, long, offset, hingePar, alpha_kp, beta_kp, theta, nCells, cw, ch, addEnds) {{
+      // New model mapping: l2 = offset, l3 = long - offset, l1 = short/2
+      // alpha_kp, beta_kp are already in keypoint convention (pi - model angle)
+      const l1 = short / 2;
+      const l2 = offset;
+      const l3 = long - offset;
+      const kps = [];
+
+      let shortLeft = getFoldKeypoints(short, -beta_kp, 2*nCells, cw, ch, 1);
+      let shortRight = getFoldKeypoints(short, beta_kp, 2*nCells, cw, ch, -1);
+      const centerY = nCells * 2 * short * Math.cos(beta_kp / 2);
+
+      let jointL = [Math.sin(alpha_kp/2)*(l2+l3), Math.cos(alpha_kp/2)*(l2+l3), 0];
+      let centerOff = [0, 0, 0];
+      shortLeft = transformFoldMembers(shortLeft, centerOff, jointL, -(Math.PI/2 + theta/2));
+
+      let jointR = [-Math.sin(alpha_kp/2)*(l2+l3), Math.cos(alpha_kp/2)*(l2+l3), 0];
+      shortRight = transformFoldMembers(shortRight, centerOff, jointR, (Math.PI/2 + theta/2));
+
+      const longKps = getScissorKeypoints(2*l3, alpha_kp, nCells, cw, ch, addEnds, true);
+      // Mark long layer as 2
+      for (const k of longKps) k[8] = 2;
+      const offsetKps = getOffsetKeypoints(l2, l3, alpha_kp, nCells, cw, ch);
+      // Mark offset layer as 3
+      for (const k of offsetKps) k[8] = 3;
+
+      kps.push(longKps[0]);
+      kps.push(...shortLeft);
+      kps.push(...shortRight);
+      kps.push(...longKps.slice(1, -1));
+      kps.push(...offsetKps);
+      kps.push(longKps[longKps.length - 1]);
+      return kps;
+    }}
+
+    function downloadKeypoints(kps, filename) {{
+      const header = "x1,y1,z1,x2,y2,z2,width,height,layer";
+      const rows = kps.map(k => k.map((v, i) => i < 6 ? v.toFixed(6) : (i < 8 ? v.toFixed(4) : v)).join(","));
+      const csv = [header, ...rows].join("\\n");
+      const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8;" }});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }}
+
+    document.getElementById("exportPetBtn").addEventListener("click", function() {{
+      if (!currentSol) return;
+      const abt = getCurrentAlphaBetaTheta();
+      if (!abt) return;
+      const cw = parseFloat(document.getElementById("kpCrossWidth").value) || 0.1;
+      const ch = parseFloat(document.getElementById("kpCrossHeight").value) || 0.1;
+      const l1 = currentSol.short / 2;
+      const l2 = currentSol.offset;
+      const l3 = currentSol.long - currentSol.offset;
+      const nCells = currentSol.n_cells;
+      const alpha_kp = Math.PI - abt.alpha;
+      const beta_kp = Math.PI - abt.beta;
+      const kps = getPetKeypoints(l1, l2, l3, alpha_kp, beta_kp, abt.theta, nCells, cw, ch, false);
+      downloadKeypoints(kps, "pet_keypoints.csv");
+      const status = document.getElementById("kpExportStatus");
+      status.textContent = "\\u2713 Exported pet_keypoints.csv (" + kps.length + " members)";
+      status.style.opacity = 1;
+      setTimeout(() => {{ status.style.opacity = 0; }}, 4000);
+    }});
+
+    document.getElementById("exportDartBtn").addEventListener("click", function() {{
+      if (!currentSol) return;
+      const abt = getCurrentAlphaBetaTheta();
+      if (!abt) return;
+      const cw = parseFloat(document.getElementById("kpCrossWidth").value) || 0.1;
+      const ch = parseFloat(document.getElementById("kpCrossHeight").value) || 0.1;
+      const nCells = currentSol.n_cells;
+      const alpha_kp = Math.PI - abt.alpha;
+      const beta_kp = Math.PI - abt.beta;
+      const kps = getDartKeypoints(currentSol.short, currentSol.long, currentSol.offset, currentSol.hinge_par, alpha_kp, beta_kp, abt.theta, nCells, cw, ch, false);
+      downloadKeypoints(kps, "dart_keypoints.csv");
+      const status = document.getElementById("kpExportStatus");
+      status.textContent = "\\u2713 Exported dart_keypoints.csv (" + kps.length + " members)";
+      status.style.opacity = 1;
+      setTimeout(() => {{ status.style.opacity = 0; }}, 4000);
+    }});
   </script>
 </body>
 </html>"""
@@ -2160,7 +2527,7 @@ if __name__ == "__main__":
     parser.add_argument("--short", type=float, default=None)
     parser.add_argument("--long", type=float, default=None)
 
-    parser.add_argument("--offset-min", type=float, default=0.001)
+    parser.add_argument("--offset-min", type=float, default=0.01)
     parser.add_argument("--offset-max", type=float, default=2.0)
     parser.add_argument("--offset-steps", type=int, default=50)
 
@@ -2180,6 +2547,10 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output", default="scissor_results.json")
     parser.add_argument("--plot-html", default="scissor_sweep.html")
     args = parser.parse_args()
+
+    print("args", args)
+    output = solve_one(args.stow_width, args.stow_depth, args.expanded_depth, args.states, args.hinge_par, 0.015, args.n, args.short, args.long, None, args.tee)
+    # import pdb; pdb.set_trace()
 
     results = sweep_offsets_and_thicknesses(args)
 
