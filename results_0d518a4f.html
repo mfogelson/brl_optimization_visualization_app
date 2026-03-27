@@ -1,0 +1,1570 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Scissor Linkage — Sweep + 3D Viewer</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #090b10;
+      color: #ccc;
+    }
+    #app {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 60vh 40vh;
+      width: 100vw;
+      height: 100vh;
+    }
+    #plotArea {
+      grid-column: 1;
+      grid-row: 1;
+      border-right: 1px solid #1f222b;
+      border-bottom: 1px solid #1f222b;
+    }
+    #plotDiv { width: 100%; height: 100%; }
+    #viewerArea {
+      grid-column: 2;
+      grid-row: 1 / 3;
+      position: relative;
+      border-bottom: 1px solid #1f222b;
+    }
+    #viewerMount { width: 100%; height: 100%; }
+    #viewerOverlay {
+      position: absolute;
+      top: 12px; left: 12px;
+      background: rgba(9,11,16,0.85);
+      border: 1px solid #1f222b;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 11px;
+      max-width: 260px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    #viewerOverlay .label { color: #666; text-transform: uppercase; letter-spacing: 2px; font-size: 8px; margin-bottom: 4px; }
+    #viewerOverlay .kv { display: flex; justify-content: space-between; line-height: 1.6; }
+    #viewerOverlay .kv .k { color: #888; }
+    #viewerOverlay .kv .v { color: #ddd; font-variant-numeric: tabular-nums; }
+    #controlsArea {
+      grid-column: 1;
+      grid-row: 2;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #controlsArea .section {
+      background: #11131a;
+      border: 1px solid #1c1e28;
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+    #controlsArea .section h3 {
+      font-size: 8px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .slider-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .slider-row label { font-size: 11px; color: #888; }
+    .slider-row span { font-size: 11px; color: #bbb; font-variant-numeric: tabular-nums; }
+    input[type=range] { width: 100%; accent-color: #c8b88a; height: 3px; }
+    #jsonPanel {
+      background: #0d0f14;
+      border: 1px solid #1c1e28;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 10px;
+      overflow: auto;
+      max-height: 200px;
+      white-space: pre;
+      color: #999;
+    }
+    #placeholder3d {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #333;
+      font-size: 14px;
+      text-align: center;
+      pointer-events: none;
+    }
+    .legend-row { font-size: 9px; line-height: 1.9; color: #666; }
+    .legend-row span.c { display: inline-block; width: 16px; text-align: center; }
+    #exportBtn, #gifBtn {
+      width: 100%;
+      padding: 10px 0;
+      background: linear-gradient(135deg, #c8b88a, #a89868);
+      color: #090b10;
+      border: none;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      font-family: inherit;
+      transition: opacity 0.2s;
+    }
+    #exportBtn:hover, #gifBtn:hover, #glbBtn:hover, #glbAnimBtn:hover { opacity: 0.85; }
+    #exportBtn:disabled, #gifBtn:disabled, #glbBtn:disabled, #glbAnimBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+    #gifBtn {
+      background: linear-gradient(135deg, #88aacc, #6688aa);
+      margin-top: 6px;
+    }
+    #exportStatus, #gifStatus {
+      font-size: 9px;
+      color: #44bb44;
+      margin-top: 6px;
+      min-height: 14px;
+      transition: opacity 0.3s;
+    }
+    .csv-field {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .csv-field label {
+      font-size: 10px;
+      color: #888;
+    }
+    .csv-field input {
+      width: 70px;
+      background: #090b10;
+      border: 1px solid #282b36;
+      border-radius: 3px;
+      color: #c8b88a;
+      font-size: 11px;
+      font-family: inherit;
+      padding: 3px 6px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .csv-field input:focus {
+      outline: none;
+      border-color: #c8b88a;
+    }
+    #csvTable th {
+      border-bottom: 1px solid #1f222b;
+      font-weight: 600;
+      font-size: 8px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    #csvTable td {
+      border-bottom: 1px solid #0d0f14;
+    }
+    .gif-settings {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 6px;
+      align-items: center;
+    }
+    .gif-settings label {
+      font-size: 9px;
+      color: #666;
+    }
+    .gif-settings input {
+      width: 50px;
+      background: #090b10;
+      border: 1px solid #282b36;
+      border-radius: 3px;
+      color: #88aacc;
+      font-size: 10px;
+      font-family: inherit;
+      padding: 2px 4px;
+      text-align: right;
+    }
+    .gif-settings input:focus {
+      outline: none;
+      border-color: #88aacc;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="plotArea"><div id="plotDiv"></div></div>
+    <div id="viewerArea">
+      <div id="viewerMount"></div>
+      <div id="placeholder3d">Click a point in the plot<br>to load the 3D viewer</div>
+      <div id="viewerOverlay" style="display:none;">
+        <div class="label">Selected Solution</div>
+        <div id="overlayContent"></div>
+      </div>
+    </div>
+    <div id="controlsArea">
+      <div class="section">
+        <h3>Deployment</h3>
+        <div class="slider-row">
+          <label>&alpha; fraction</label>
+          <span id="alphaVal">70%</span>
+        </div>
+        <input type="range" id="alphaSlider" min="0.001" max="1" step="0.002" value="0.7" />
+        <div style="display:flex;justify-content:space-between;font-size:8px;color:#555;margin-top:2px;">
+          <span>STOWED</span><span>DEPLOYED</span>
+        </div>
+      </div>
+      <div class="section">
+        <h3>Visualization</h3>
+        <div class="slider-row">
+          <label>Member thickness</label>
+          <span id="thicknessVal">0.006</span>
+        </div>
+        <input type="range" id="thicknessSlider" min="0.001" max="0.025" step="0.0005" value="0.006" />
+        <div class="slider-row">
+          <label>Hinge height</label>
+          <span id="hingePerVal">0.08</span>
+        </div>
+        <input type="range" id="hingePerSlider" min="0.001" max="0.03" step="0.001" value="0.008" />
+        <div class="slider-row">
+          <label>Show cells</label>
+          <span id="cellsVal">2</span>
+        </div>
+        <input type="range" id="cellsSlider" min="1" max="999" step="1" value="2" />
+      </div>
+      <div style="margin:6px 0;">
+        <label style="font-size:10px;color:#888;cursor:pointer;">
+          <input type="checkbox" id="refFrameToggle" style="vertical-align:middle;" />
+          Show reference frames
+        </label>
+      </div>
+      <div class="section">
+        <h3>Animation &amp; GIF Export</h3>
+        <div class="gif-settings">
+          <label>Frames</label>
+          <input type="number" id="gifFrames" value="60" min="10" max="300" />
+          <label>Delay (ms)</label>
+          <input type="number" id="gifDelay" value="33" min="10" max="200" />
+        </div>
+        <button id="gifBtn" disabled>Record Deployment GIF</button>
+        <div id="gifStatus"></div>
+      </div>
+      <div class="section">
+        <h3>3D Export</h3>
+        <button id="glbBtn" disabled style="width:100%;padding:10px 0;background:linear-gradient(135deg,#6a9f5b,#4a7f3b);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:opacity 0.2s;">Export .GLB (current frame)</button>
+        <div id="glbStatus" style="font-size:9px;color:#44bb44;margin-top:6px;min-height:14px;"></div>
+        <div style="margin-top:8px;">
+          <div class="gif-settings">
+            <label>Frames</label>
+            <input type="number" id="glbAnimFrames" value="30" min="2" max="120" style="width:50px;background:#090b10;border:1px solid #282b36;border-radius:3px;color:#6a9f5b;font-size:10px;font-family:inherit;padding:2px 4px;text-align:right;" />
+          </div>
+          <button id="glbAnimBtn" disabled style="width:100%;padding:10px 0;background:linear-gradient(135deg,#5b8f9f,#3b6f7f);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:opacity 0.2s;margin-top:6px;">Export Animation .ZIP</button>
+          <div id="glbAnimStatus" style="font-size:9px;color:#44bb44;margin-top:6px;min-height:14px;"></div>
+        </div>
+      </div>
+      <div class="section">
+        <h3>Legend</h3>
+        <div class="legend-row"><span class="c" style="color:#2255cc">&mdash;</span> long arms</div>
+        <div class="legend-row"><span class="c" style="color:#1d8c36">&mdash;</span> short members</div>
+        <div class="legend-row"><span class="c" style="color:#c4164a">&mdash;</span> offset (last cell)</div>
+        <div class="legend-row"><span class="c" style="color:#999">&mdash;</span> hinge (grey)</div>
+        <div class="legend-row"><span class="c" style="color:#44bb44">&mdash;</span> short hinges</div>
+        <div class="legend-row"><span class="c" style="color:#cc2255">&mdash;</span> longerons</div>
+        <div style="font-size:8px;color:#444;margin-top:6px;">L-drag: orbit &middot; R-drag: pan &middot; Scroll: zoom</div>
+      </div>
+      <div class="section">
+        <h3>Export to CAD CSV (rounded)</h3>
+        <div id="roundedStatus" style="font-size:9px;margin-bottom:6px;min-height:14px;"></div>
+        <table id="csvTable" style="width:100%;border-collapse:collapse;font-size:10px;">
+          <thead>
+            <tr style="color:#555;text-align:left;">
+              <th style="padding:2px 4px;">Parameter</th>
+              <th style="padding:2px 4px;text-align:right;">Solver (m)</th>
+              <th style="padding:2px 4px;text-align:right;">Rounded (mm)</th>
+            </tr>
+          </thead>
+          <tbody id="csvTableBody">
+            <tr><td colspan="3" style="color:#444;padding:6px;">Click a point first</td></tr>
+          </tbody>
+        </table>
+        <div style="margin-top:8px;">
+          <div class="csv-field">
+            <label>Hole_Diameter</label>
+            <div><input type="number" id="csvHoleDiam" value="2" step="0.1" min="0.1" /> <span style="font-size:9px;color:#555">mm</span></div>
+          </div>
+          <div class="csv-field">
+            <label>Hinge_Perp</label>
+            <div><input type="number" id="csvHingePerp" value="2" step="0.1" min="0.1" /> <span style="font-size:9px;color:#555">mm</span></div>
+          </div>
+        </div>
+        <button id="exportBtn" disabled>Export CSV</button>
+        <div id="exportStatus"></div>
+      </div>
+      <div class="section">
+        <h3>Full JSON output</h3>
+        <pre id="jsonPanel">Click a point to populate.</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+
+// ─── 3D Scissor Linkage Viewer ───────────────────────────────────────────────
+// Realistic materials: carbon fiber beams, brushed aluminum hinges
+
+(function() {
+  const DEG = Math.PI / 180;
+  const RAD = 180 / Math.PI;
+
+  // ── Procedural textures ──
+  function makeCarbonFiberTexture(size) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, size, size);
+    const cell = size / 16;
+    for (let y = 0; y < size; y += cell) {
+      for (let x = 0; x < size; x += cell) {
+        const checker = ((x / cell + y / cell) % 2 === 0);
+        ctx.fillStyle = checker ? '#222222' : '#181818';
+        ctx.fillRect(x, y, cell, cell);
+        ctx.strokeStyle = checker ? '#252525' : '#1c1c1c';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + cell, y + cell); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x + cell, y); ctx.lineTo(x, y + cell); ctx.stroke();
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 1);
+    return tex;
+  }
+
+  function makeCarbonNormalMap(size) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#8080ff';
+    ctx.fillRect(0, 0, size, size);
+    const cell = size / 16;
+    for (let y = 0; y < size; y += cell) {
+      for (let x = 0; x < size; x += cell) {
+        const checker = ((x / cell + y / cell) % 2 === 0);
+        ctx.fillStyle = checker ? '#8888ff' : '#7878ff';
+        ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 1);
+    return tex;
+  }
+
+  function makeBrushedMetalTexture(size) {
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#c8c8c8';
+    ctx.fillRect(0, 0, size, size);
+    for (let y = 0; y < size; y++) {
+      const v = 180 + Math.random() * 30;
+      ctx.strokeStyle = `rgb(${v},${v},${v})`;
+      ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(size, y + 0.5); ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1, 4);
+    return tex;
+  }
+
+  // ── Material cache ──
+  let matCache = null;
+  function getMaterials() {
+    if (matCache) return matCache;
+    const cfTex = makeCarbonFiberTexture(256);
+    const cfNorm = makeCarbonNormalMap(256);
+    const alTex = makeBrushedMetalTexture(256);
+
+    matCache = {
+      carbonFiber: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x2a2a2a, metalness: 0.15, roughness: 0.35,
+      }),
+      carbonFiberOffset: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x1a1a22, metalness: 0.15, roughness: 0.35,
+      }),
+      aluminum: new THREE.MeshStandardMaterial({
+        map: alTex, color: 0xd0d0d8, metalness: 0.85, roughness: 0.25,
+      }),
+      aluminumDark: new THREE.MeshStandardMaterial({
+        map: alTex, color: 0x8888a0, metalness: 0.85, roughness: 0.3,
+      }),
+      aluminumGreen: new THREE.MeshStandardMaterial({
+        map: alTex, color: 0x88aa88, metalness: 0.8, roughness: 0.28,
+      }),
+      carbonShort: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x1a2a1a, metalness: 0.15, roughness: 0.35,
+      }),
+      longeron: new THREE.MeshStandardMaterial({
+        map: cfTex, normalMap: cfNorm, normalScale: new THREE.Vector2(0.3, 0.3),
+        color: 0x2a1a2a, metalness: 0.15, roughness: 0.35,
+      }),
+      joint: new THREE.MeshStandardMaterial({
+        color: 0x444444, metalness: 0.9, roughness: 0.15,
+      }),
+    };
+    return matCache;
+  }
+
+  const MAT_CARBON  = 'carbonFiber';
+  const MAT_CARBON_OFF = 'carbonFiberOffset';
+  const MAT_CARBON_SHORT = 'carbonShort';
+  const MAT_ALU     = 'aluminum';
+  const MAT_ALU_DARK = 'aluminumDark';
+  const MAT_ALU_GREEN = 'aluminumGreen';
+  const MAT_LONGERON = 'longeron';
+  const MAT_JOINT   = 'joint';
+
+  function compute2D(L, O, alpha) {
+    const ha = alpha / 2;
+    const ca = Math.cos(ha), sa = Math.sin(ha);
+    const LmO = L - O;
+    const P1x = L * ca, P1y = L * sa;
+    const P2x = LmO * ca, P2y = -LmO * sa;
+    const c = 2 * LmO * sa;
+    const P3x = P1x, P3y = P1y - c;
+    return { P1x, P1y, P2x, P2y, P3x, P3y, c, a: L * ca };
+  }
+
+  function addTube(grp, a, b, matKey, radius) {
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const len = dir.length();
+    if (len < 1e-5) return;
+    const geo = new THREE.CylinderGeometry(radius, radius, len, 16);
+    const mat = getMaterials()[matKey];
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.addVectors(a, b).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+    grp.add(mesh);
+  }
+
+  function addBall(grp, pos, matKey, radius) {
+    const geo = new THREE.SphereGeometry(radius, 16, 16);
+    const mat = getMaterials()[matKey];
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    grp.add(mesh);
+  }
+
+  function shortApex(origin, pA, halfBeta, S, sign) {
+    const cbh = Math.cos(halfBeta);
+    const sbh = Math.sin(halfBeta);
+    const tx = -Math.cos(pA);
+    const tz = Math.sin(pA);
+    return new THREE.Vector3(
+      origin.x + S * cbh * tx,
+      origin.y - sign * S * sbh,
+      origin.z + S * cbh * tz
+    );
+  }
+
+  function addShortDnHinge(grp, dnApex, pA, hingePar, hingePer, matKey, radius, Jrs) {
+    const tx = -Math.cos(pA);
+    const tz = Math.sin(pA);
+    const nx = Math.sin(pA);
+    const nz = Math.cos(pA);
+    const hParEnd = new THREE.Vector3(
+      dnApex.x + hingePar * tx, dnApex.y, dnApex.z + hingePar * tz
+    );
+    const hPerEnd = new THREE.Vector3(
+      hParEnd.x + hingePer * nx, hParEnd.y, hParEnd.z + hingePer * nz
+    );
+    addTube(grp, dnApex, hParEnd, matKey, radius);
+    addTube(grp, hParEnd, hPerEnd, matKey, radius);
+    addBall(grp, hParEnd, matKey, Jrs);
+    addBall(grp, hPerEnd, matKey, Jrs);
+  }
+
+  function addRefFrame(grp, pos, size, T) {
+    const r = T * 0.4;
+    const matR = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.5, roughness: 0.4 });
+    const matG = new THREE.MeshStandardMaterial({ color: 0x00ff00, metalness: 0.5, roughness: 0.4 });
+    const matB = new THREE.MeshStandardMaterial({ color: 0x0000ff, metalness: 0.5, roughness: 0.4 });
+    function tube(a, b, mat) {
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length(); if (len < 1e-5) return;
+      const geo = new THREE.CylinderGeometry(r, r, len, 8);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.addVectors(a, b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      grp.add(mesh);
+    }
+    tube(pos, new THREE.Vector3(pos.x + size, pos.y, pos.z), matR);
+    tube(pos, new THREE.Vector3(pos.x, pos.y + size, pos.z), matG);
+    tube(pos, new THREE.Vector3(pos.x, pos.y, pos.z + size), matB);
+  }
+
+  function addRotatedRefFrame(grp, pos, size, T, angle) {
+    const r = T * 0.4;
+    const ca = Math.cos(angle), sa = Math.sin(angle);
+    const matR = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.5, roughness: 0.4 });
+    const matG = new THREE.MeshStandardMaterial({ color: 0x00ff00, metalness: 0.5, roughness: 0.4 });
+    const matB = new THREE.MeshStandardMaterial({ color: 0x0000ff, metalness: 0.5, roughness: 0.4 });
+    function tube(a, b, mat) {
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length(); if (len < 1e-5) return;
+      const geo = new THREE.CylinderGeometry(r, r, len, 8);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.addVectors(a, b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      grp.add(mesh);
+    }
+    tube(pos, new THREE.Vector3(pos.x + size * ca, pos.y, pos.z - size * sa), matR);
+    tube(pos, new THREE.Vector3(pos.x, pos.y + size, pos.z), matG);
+    tube(pos, new THREE.Vector3(pos.x + size * sa, pos.y, pos.z + size * ca), matB);
+  }
+
+  function buildScene(L, O, alpha, nCells, T, hingePar, hingePer, S, h, showCells, longeronLen, showRefFrames, stowWidth) {
+    const root = new THREE.Group();
+    const { P1x, P1y, P2x, P2y, P3x, P3y, c, a } = compute2D(L, O, alpha);
+
+    const sb = S > 1e-6 ? Math.min(1, Math.max(0, c / (2 * S))) : 0;
+    const halfBeta = Math.asin(sb);
+    const cb = Math.cos(halfBeta);
+    const b = S * cb;
+    const num = (2 * a + 2 * h) ** 2;
+    const den = 2 * (b + 2 * h) ** 2;
+    let cosTheta = den > 1e-14 ? 1 - num / den : 1;
+    cosTheta = Math.max(-1, Math.min(1, cosTheta));
+    const theta = Math.acos(cosTheta);
+
+    const planeAngle = (Math.PI - theta) / 2;
+    const leftPlaneAngle = (Math.PI + theta) / 2;
+
+    const cellsToShow = Math.min(showCells, nCells);
+    const Toff = T * 0.75;
+    const Jr = T * 1.4;
+    const Jrs = T * 1.1;
+    const refSize = 0.08;
+
+    for (let i = 0; i < cellsToShow; i++) {
+      const g = new THREE.Group();
+      g.position.set(0, -i * c, 0);
+
+      // ── RIGHT HALF (+X) ──
+      const rOup = new THREE.Vector3(0, 0, +T);
+      const rOdn = new THREE.Vector3(0, 0, -T);
+      const rP1 = new THREE.Vector3(P1x, P1y, +T);
+      const rP2 = new THREE.Vector3(P2x, P2y, -T);
+
+      addTube(g, rOup, rP1, MAT_CARBON, T);
+      addTube(g, rOdn, rP2, MAT_CARBON, T);
+
+      const rP1_up = new THREE.Vector3(P1x, P1y, +2*T);
+      addBall(g, rP1_up, MAT_ALU, Jrs);
+      const rH2 = new THREE.Vector3(P1x, P1y, 2*T+hingePer);
+      addTube(g, rP1_up, rH2, MAT_ALU, Toff);
+
+      const rSH = new THREE.Vector3(
+        rH2.x + hingePer * Math.sin(planeAngle), rH2.y,
+        rH2.z + hingePer * Math.cos(planeAngle)
+      );
+      addTube(g, rH2, rSH, MAT_ALU_GREEN, Toff);
+
+      const rSH_par = new THREE.Vector3(
+        rSH.x - hingePar * Math.cos(planeAngle), rSH.y,
+        rSH.z + hingePar * Math.sin(planeAngle)
+      );
+      addTube(g, rSH, rSH_par, MAT_ALU_GREEN, Toff);
+      addBall(g, rSH, MAT_ALU_GREEN, Jrs);
+      addBall(g, rSH_par, MAT_ALU_GREEN, Jrs);
+
+      if (showRefFrames) addRefFrame(g, rH2, refSize, T);
+      if (showRefFrames) addRotatedRefFrame(g, rSH_par, refSize, T, planeAngle);
+
+      const rSH_par_up = new THREE.Vector3(rSH_par.x, rSH_par.y, rSH_par.z + T);
+      const rShortDn = shortApex(rSH_par_up, planeAngle, halfBeta, S, -1);
+      const rSH_par_up_up = new THREE.Vector3(rSH_par_up.x, rSH_par_up.y, rSH_par_up.z + T);
+      const rShortUp = shortApex(rSH_par_up_up, planeAngle, halfBeta, S, +1);
+      addTube(g, rSH_par_up_up, rShortUp, MAT_CARBON_SHORT, Toff);
+      addBall(g, rShortUp, MAT_CARBON_SHORT, Jrs);
+      addBall(g, rSH_par_up_up, MAT_CARBON_SHORT, Jrs);
+
+      if (i > 0) {
+        addTube(g, rSH_par_up, rShortDn, MAT_CARBON_SHORT, Toff);
+        addBall(g, rSH_par_up, MAT_CARBON_SHORT, Jrs);
+        addBall(g, rShortDn, MAT_CARBON_SHORT, Jrs);
+        const rShortDn_dn = new THREE.Vector3(rShortDn.x, rShortDn.y, rShortDn.z - T);
+        addShortDnHinge(g, rShortDn_dn, planeAngle, hingePar, -hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, rShortDn_dn, MAT_ALU_GREEN, Jrs);
+      }
+
+      if (i === cellsToShow - 1) {
+        const rP3 = new THREE.Vector3(P3x, P3y, +T);
+        const rP3_up = new THREE.Vector3(P3x, P3y, +2*T);
+        const rP2_up = new THREE.Vector3(P2x, P2y, +T);
+        addTube(g, rP2_up, rP3, MAT_CARBON_OFF, Toff);
+        const rH3up = new THREE.Vector3(P3x, P3y, 2*T + hingePer);
+        addTube(g, rP3_up, rH3up, MAT_ALU, Toff);
+        const rSH3 = new THREE.Vector3(
+          rH3up.x + hingePer * Math.sin(planeAngle), rH3up.y,
+          rH3up.z + hingePer * Math.cos(planeAngle)
+        );
+        addTube(g, rH3up, rSH3, MAT_ALU_GREEN, Toff);
+        const rSH3_par = new THREE.Vector3(
+          rSH3.x - hingePar * Math.cos(planeAngle), rSH3.y,
+          rSH3.z + hingePar * Math.sin(planeAngle)
+        );
+        addTube(g, rSH3, rSH3_par, MAT_ALU_GREEN, Toff);
+        if (showRefFrames) addRefFrame(g, rH3up, refSize, T);
+        if (showRefFrames) addRotatedRefFrame(g, rSH3_par, refSize, T, planeAngle);
+        const rSH3_par_up = new THREE.Vector3(rSH3_par.x, rSH3_par.y, rSH3_par.z + T);
+        const rSh3Dn = shortApex(rSH3_par_up, planeAngle, halfBeta, S, -1);
+        addTube(g, rSH3_par_up, rSh3Dn, MAT_CARBON_SHORT, Toff);
+        addBall(g, rSH3_par_up, MAT_CARBON_SHORT, Jrs);
+        addBall(g, rSh3Dn, MAT_CARBON_SHORT, Jrs);
+        const rSh3Dn_up = new THREE.Vector3(rSh3Dn.x, rSh3Dn.y, rSh3Dn.z - T);
+        addShortDnHinge(g, rSh3Dn_up, planeAngle, hingePar, -hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, rSh3Dn_up, MAT_ALU_GREEN, Jrs);
+        addBall(g, rP2_up, MAT_CARBON_OFF, Jrs);
+        addBall(g, rP3_up, MAT_ALU, Jrs);
+        addBall(g, rP3, MAT_CARBON_OFF, Jrs);
+        addBall(g, rH3up, MAT_ALU, Jrs);
+        addBall(g, rSH3, MAT_ALU_GREEN, Jrs);
+        addBall(g, rSH3_par, MAT_ALU_GREEN, Jrs);
+      }
+
+      addBall(g, rOup, MAT_JOINT, Jr);
+      addBall(g, rOdn, MAT_JOINT, Jr);
+      addBall(g, rP1, MAT_CARBON, Jrs);
+      addBall(g, rP2, MAT_CARBON, Jrs);
+      addBall(g, rH2, MAT_ALU, Jrs);
+
+      // ── Longerons (right) ──
+      const longeron_length = longeronLen;
+      const longeron_halfAngle = Math.asin(c/(2*longeron_length));
+      const rP1_offset = new THREE.Vector3(P1x, P1y, -2*T);
+      const rP3r = new THREE.Vector3(P3x, P3y, -T);
+      const rP3_offset = new THREE.Vector3(P3x, P3y, -3*T);
+      const rP1_Longeron = new THREE.Vector3(
+        rP1_offset.x - Math.cos(longeron_halfAngle)*longeron_length,
+        rP1_offset.y - Math.sin(longeron_halfAngle)*longeron_length,
+        rP1_offset.z - T
+      );
+      const rP3_Longeron = new THREE.Vector3(
+        rP3_offset.x - Math.cos(longeron_halfAngle)*longeron_length,
+        rP3_offset.y + Math.sin(longeron_halfAngle)*longeron_length,
+        rP3_offset.z - T
+      );
+      addTube(g, rP1_offset, rP1_Longeron, MAT_LONGERON, Toff);
+      addTube(g, rP3_offset, rP3_Longeron, MAT_LONGERON, Toff);
+      addTube(g, rP1, rP1_offset, MAT_ALU, Jrs);
+      addTube(g, rP3r, rP3_offset, MAT_ALU, Jrs);
+      addBall(g, rP1_Longeron, MAT_LONGERON, Jrs);
+      addBall(g, rP3_Longeron, MAT_LONGERON, Jrs);
+
+      if (i > 0 && i % 2 === 0) {
+        const rLongUp_ref = new THREE.Vector3(rShortUp.x, rShortUp.y, rShortUp.z +2*T);
+        addTube(g, rShortUp, rLongUp_ref, MAT_ALU, Toff);
+        const rLongUp = new THREE.Vector3(
+          rShortUp.x + Math.cos(longeron_halfAngle)*longeron_length,
+          rShortUp.y + Math.sin(longeron_halfAngle)*longeron_length,
+          rShortUp.z +2*T
+        );
+        addTube(g, rLongUp_ref, rLongUp, MAT_LONGERON, Toff);
+        addBall(g, rLongUp_ref, MAT_LONGERON, Jrs);
+        addBall(g, rLongUp, MAT_LONGERON, Jrs);
+
+        const rLongDn_ref = new THREE.Vector3(rShortDn.x, rShortDn.y, rShortDn.z +2*T);
+        const rLongDn = new THREE.Vector3(
+          rShortDn.x + Math.cos(longeron_halfAngle)*longeron_length,
+          rShortDn.y - Math.sin(longeron_halfAngle)*longeron_length,
+          rShortDn.z +2*T
+        );
+        addTube(g, rLongDn_ref, rLongDn, MAT_LONGERON, Toff);
+        addBall(g, rLongDn_ref, MAT_LONGERON, Jrs);
+        addBall(g, rLongDn, MAT_LONGERON, Jrs);
+      }
+
+      // ── LEFT HALF (-X) ──
+      const lOup = new THREE.Vector3(0, 0, -T);
+      const lOdn = new THREE.Vector3(0, 0, +T);
+      const lP1 = new THREE.Vector3(-P1x, P1y, -T);
+      const lP2 = new THREE.Vector3(-P2x, P2y, +T);
+
+      addTube(g, lOup, lP1, MAT_CARBON, Toff);
+      addTube(g, lOdn, lP2, MAT_CARBON, Toff);
+
+      const spacer = new THREE.Vector3(-P1x, P1y, 2*T);
+      addTube(g, lP1, spacer, MAT_ALU, Toff);
+      const lH2 = new THREE.Vector3(spacer.x, spacer.y, spacer.z + hingePer);
+      addTube(g, spacer, lH2, MAT_ALU, Toff);
+      addBall(g, spacer, MAT_ALU, Jrs);
+
+      const lSH = new THREE.Vector3(
+        lH2.x - hingePer * Math.sin(leftPlaneAngle), lH2.y,
+        lH2.z - hingePer * Math.cos(leftPlaneAngle)
+      );
+      addTube(g, lH2, lSH, MAT_ALU_GREEN, Toff);
+      const lSH_par = new THREE.Vector3(
+        lSH.x - hingePar * Math.cos(leftPlaneAngle), lSH.y,
+        lSH.z + hingePar * Math.sin(leftPlaneAngle)
+      );
+      addTube(g, lSH, lSH_par, MAT_ALU_GREEN, Toff);
+      addBall(g, lSH, MAT_ALU_GREEN, Jrs);
+      addBall(g, lSH_par, MAT_ALU_GREEN, Jrs);
+
+      if (showRefFrames) addRefFrame(g, lH2, refSize, T);
+      if (showRefFrames) addRotatedRefFrame(g, lSH_par, refSize, T, -leftPlaneAngle);
+
+      const lSH_par_up = new THREE.Vector3(lSH_par.x, lSH_par.y, lSH_par.z + T);
+      const lShortDn = shortApex(lSH_par_up, leftPlaneAngle, halfBeta, S, -1);
+      const lSH_par_up_up = new THREE.Vector3(lSH_par_up.x, lSH_par_up.y, lSH_par_up.z + T);
+      const lShortUp = shortApex(lSH_par_up_up, leftPlaneAngle, halfBeta, S, +1);
+      addTube(g, lSH_par_up_up, lShortUp, MAT_CARBON_SHORT, Toff);
+      addBall(g, lShortUp, MAT_CARBON_SHORT, Jrs);
+      addBall(g, lSH_par_up_up, MAT_CARBON_SHORT, Jrs);
+
+      if (i > 0) {
+        addTube(g, lSH_par_up, lShortDn, MAT_CARBON_SHORT, Toff);
+        addBall(g, lSH_par_up, MAT_CARBON_SHORT, Jrs);
+        const lShortDn_dn = new THREE.Vector3(lShortDn.x, lShortDn.y, lShortDn.z - T);
+        addShortDnHinge(g, lShortDn_dn, leftPlaneAngle, hingePar, hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, lShortDn_dn, MAT_ALU_GREEN, Jrs);
+        addBall(g, lShortDn, MAT_CARBON_SHORT, Jrs);
+      }
+
+      if (i === cellsToShow - 1) {
+        const lP3 = new THREE.Vector3(-P3x, P3y, -T);
+        const lP2_dn = new THREE.Vector3(-P2x, P2y, -T);
+        addBall(g, lP2_dn, MAT_CARBON_OFF, Jrs);
+        addTube(g, lP2_dn, lP3, MAT_CARBON_OFF, Toff);
+        const lP3_up = new THREE.Vector3(-P3x, P3y, +2*T);
+        addTube(g, lP3_up, lP3, MAT_ALU, Toff);
+        const lH3up = new THREE.Vector3(-P3x, P3y, 2*T + hingePer);
+        addTube(g, lP3_up, lH3up, MAT_ALU, Toff);
+        const lSH3 = new THREE.Vector3(
+          lH3up.x - hingePer * Math.sin(leftPlaneAngle), lH3up.y,
+          lH3up.z - hingePer * Math.cos(leftPlaneAngle)
+        );
+        addTube(g, lH3up, lSH3, MAT_ALU_GREEN, Toff);
+        const lSH3_par = new THREE.Vector3(
+          lSH3.x - hingePar * Math.cos(leftPlaneAngle), lSH3.y,
+          lSH3.z + hingePar * Math.sin(leftPlaneAngle)
+        );
+        addTube(g, lSH3, lSH3_par, MAT_ALU_GREEN, Toff);
+        if (showRefFrames) addRefFrame(g, lH3up, refSize, T);
+        if (showRefFrames) addRotatedRefFrame(g, lSH3_par, refSize, T, -leftPlaneAngle);
+        const lSH3_par_up = new THREE.Vector3(lSH3_par.x, lSH3_par.y, lSH3_par.z + T);
+        const lSh3Dn = shortApex(lSH3_par_up, leftPlaneAngle, halfBeta, S, -1);
+        addTube(g, lSH3_par_up, lSh3Dn, MAT_CARBON_SHORT, Toff);
+        addBall(g, lSH3_par_up, MAT_CARBON_SHORT, Jrs);
+        addBall(g, lSh3Dn, MAT_CARBON_SHORT, Jrs);
+        const lSh3Dn_up = new THREE.Vector3(lSh3Dn.x, lSh3Dn.y, lSh3Dn.z - T);
+        addShortDnHinge(g, lSh3Dn_up, leftPlaneAngle, hingePar, hingePer, MAT_ALU_GREEN, Toff, Jrs);
+        addBall(g, lSh3Dn_up, MAT_ALU_GREEN, Jrs);
+        addBall(g, lP3_up, MAT_ALU, Jrs);
+        addBall(g, lP3, MAT_CARBON_OFF, Jrs);
+        addBall(g, lH3up, MAT_ALU, Jrs);
+        addBall(g, lSH3, MAT_ALU_GREEN, Jrs);
+        addBall(g, lSH3_par, MAT_ALU_GREEN, Jrs);
+      }
+
+      addBall(g, lP1, MAT_CARBON, Jrs);
+      addBall(g, lP2, MAT_CARBON, Jrs);
+      addBall(g, lH2, MAT_ALU, Jrs);
+
+      // Longerons (left)
+      const longeron_length_l = longeronLen;
+      const longeron_halfAngle_l = Math.asin(c/(2*longeron_length_l));
+      const lP1_offset = new THREE.Vector3(-P1x, P1y, -2*T);
+      const lP3l = new THREE.Vector3(-P3x, P3y, -T);
+      const lP3_offset = new THREE.Vector3(-P3x, P3y, -3*T);
+      const lP1_Longeron = new THREE.Vector3(
+        lP1_offset.x + Math.cos(longeron_halfAngle_l)*longeron_length_l,
+        lP1_offset.y - Math.sin(longeron_halfAngle_l)*longeron_length_l,
+        lP1_offset.z - T
+      );
+      const lP3_Longeron = new THREE.Vector3(
+        lP3_offset.x + Math.cos(longeron_halfAngle_l)*longeron_length_l,
+        lP3_offset.y + Math.sin(longeron_halfAngle_l)*longeron_length_l,
+        lP3_offset.z - T
+      );
+      addTube(g, lP1_offset, lP1_Longeron, MAT_LONGERON, Toff);
+      addTube(g, lP3_offset, lP3_Longeron, MAT_LONGERON, Toff);
+      addTube(g, lP1_offset, lP1, MAT_ALU, Jrs);
+      addTube(g, lP3l, lP3_offset, MAT_ALU, Jrs);
+      addBall(g, lP1_Longeron, MAT_LONGERON, Jrs);
+      addBall(g, lP3_Longeron, MAT_LONGERON, Jrs);
+
+      if (i > 0 && i % 2 === 1) {
+        const lLongUp_ref = new THREE.Vector3(lShortUp.x, lShortUp.y, lShortUp.z +2*T);
+        addTube(g, lShortUp, lLongUp_ref, MAT_ALU, Toff);
+        const lLongUp = new THREE.Vector3(
+          lShortUp.x - Math.cos(longeron_halfAngle_l)*longeron_length_l,
+          lShortUp.y + Math.sin(longeron_halfAngle_l)*longeron_length_l,
+          lShortUp.z +2*T
+        );
+        addTube(g, lLongUp_ref, lLongUp, MAT_LONGERON, Toff);
+        addBall(g, lLongUp_ref, MAT_LONGERON, Jrs);
+        addBall(g, lLongUp, MAT_LONGERON, Jrs);
+
+        const lLongDn_ref = new THREE.Vector3(lShortDn.x, lShortDn.y, lShortDn.z +2*T);
+        const lLongDn = new THREE.Vector3(
+          lShortDn.x - Math.cos(longeron_halfAngle_l)*longeron_length_l,
+          lShortDn.y - Math.sin(longeron_halfAngle_l)*longeron_length_l,
+          lShortDn.z +2*T
+        );
+        addTube(g, lLongDn_ref, lLongDn, MAT_LONGERON, Toff);
+        addBall(g, lLongDn_ref, MAT_LONGERON, Jrs);
+        addBall(g, lLongDn, MAT_LONGERON, Jrs);
+      }
+
+      root.add(g);
+    }
+
+    // ── Solar panel surface (translucent blue, on top, stow width x deployed depth) ──
+    const panelDepth = c * cellsToShow;
+    const panelWidth = stowWidth || (2 * S + 4 * hingePar);
+    if (panelDepth > 1e-4 && panelWidth > 1e-4) {
+      const panelGeo = new THREE.PlaneGeometry(panelWidth, panelDepth);
+      const panelMat = new THREE.MeshStandardMaterial({
+        color: 0x1155cc,
+        transparent: true,
+        opacity: 0.18,
+        side: THREE.DoubleSide,
+        metalness: 0.3,
+        roughness: 0.6,
+      });
+      const panel = new THREE.Mesh(panelGeo, panelMat);
+      // Position at top of structure (P1y-gy level), centered over deployed cells
+      panel.position.set(0, P1y - panelDepth / 2, -0.06);
+      // Rotate to lie flat in XY plane (default PlaneGeometry is in XY, we want XY)
+      root.add(panel);
+
+      // Grid lines on panel for solar cell look
+      const gridMat = new THREE.LineBasicMaterial({ color: 0x2266dd, transparent: true, opacity: 0.25 });
+      const nGridX = Math.max(2, Math.round(panelWidth / (T * 20)));
+      const nGridY = Math.max(2, Math.round(panelDepth / (T * 20)));
+      for (let gx = 0; gx <= nGridX; gx++) {
+        const x = -panelWidth/2 + gx * panelWidth / nGridX;
+        const pts = [new THREE.Vector3(x, P1y, -0.061), new THREE.Vector3(x, P1y - panelDepth, 0.001)];
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+        root.add(new THREE.Line(lineGeo, gridMat));
+      }
+      for (let gy = 0; gy <= nGridY; gy++) {
+        const y = P1y - gy * panelDepth / nGridY;
+        const pts = [new THREE.Vector3(-panelWidth/2, y, 0.001), new THREE.Vector3(panelWidth/2, y, 0.001)];
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+        root.add(new THREE.Line(lineGeo, gridMat));
+      }
+    }
+
+    // ── Satellite bus (top of structure) ──
+    const busWidth = panelWidth;
+    const busHeight = busWidth * 0.6;
+    const busDepth = busWidth * 0.8;
+    const busY = P1y + busHeight / 2 + T * 4;
+
+    const busMat = new THREE.MeshStandardMaterial({
+      color: 0xcccc88,
+      metalness: 0.7,
+      roughness: 0.3,
+    });
+    const busGeo = new THREE.BoxGeometry(busWidth, busHeight, busDepth);
+    const bus = new THREE.Mesh(busGeo, busMat);
+    bus.position.set(0, busY, 0);
+    root.add(bus);
+
+    // Solar panel wings on satellite (small fixed panels)
+    const wingW = busWidth * 0.15;
+    const wingH = busHeight * 0.8;
+    const wingD = busDepth * 1.8;
+    const wingMat = new THREE.MeshStandardMaterial({
+      color: 0x1144aa,
+      metalness: 0.4,
+      roughness: 0.5,
+      side: THREE.DoubleSide,
+    });
+    const wingGeoL = new THREE.BoxGeometry(wingW, wingH * 0.05, wingD);
+    const wingL = new THREE.Mesh(wingGeoL, wingMat);
+    wingL.position.set(-busWidth/2 - wingW/2, busY, 0);
+    root.add(wingL);
+    const wingR = new THREE.Mesh(wingGeoL, wingMat);
+    wingR.position.set(busWidth/2 + wingW/2, busY, 0);
+    root.add(wingR);
+
+    // Antenna dish
+    const dishR = busWidth * 0.2;
+    const dishGeo = new THREE.SphereGeometry(dishR, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    const dishMat = new THREE.MeshStandardMaterial({
+      color: 0xeeeeee,
+      metalness: 0.8,
+      roughness: 0.2,
+      side: THREE.DoubleSide,
+    });
+    const dish = new THREE.Mesh(dishGeo, dishMat);
+    dish.position.set(busWidth * 0.25, busY + busHeight/2, busDepth * 0.15);
+    dish.rotation.x = -Math.PI / 2;
+    root.add(dish);
+
+    // Antenna mast
+    const mastH = busHeight * 0.3;
+    const mastGeo = new THREE.CylinderGeometry(T * 0.3, T * 0.3, mastH, 8);
+    const mastMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8, roughness: 0.3 });
+    const mast = new THREE.Mesh(mastGeo, mastMat);
+    mast.position.set(busWidth * 0.25, busY + busHeight/2 + mastH/2, busDepth * 0.15);
+    root.add(mast);
+
+    // Connecting strut from satellite to structure top
+    const strutMat = getMaterials()[MAT_ALU];
+    const strutTop = new THREE.Vector3(0, busY - busHeight/2, 0);
+    const strutBot = new THREE.Vector3(0, P1y, 0);
+    addTube(root, strutTop, strutBot, MAT_ALU, T * 1.5);
+
+    return { group: root, c, theta, halfBeta, cellsToShow };
+  }
+
+  // ── Viewer state ──
+  let viewerState = null;
+
+  function disposeGroup(group) {
+    group.traverse(ch => {
+      if (ch.geometry) ch.geometry.dispose();
+    });
+  }
+
+  function initViewer(container) {
+    const W = container.clientWidth, H = container.clientHeight;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setSize(W, H);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setClearColor(0x12141a, 1);
+    renderer.physicallyCorrectLights = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.add(new THREE.HemisphereLight(0xc8d8f0, 0x303840, 0.6));
+    const d1 = new THREE.DirectionalLight(0xfff0e0, 1.2);
+    d1.position.set(5, 8, 7); scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0xc0d0f0, 0.4);
+    d2.position.set(-5, -4, 6); scene.add(d2);
+    const d3 = new THREE.DirectionalLight(0xe0e8ff, 0.3);
+    d3.position.set(0, -2, -8); scene.add(d3);
+
+    const camera = new THREE.PerspectiveCamera(45, W / H, 0.001, 200);
+    camera.userData.tgt = new THREE.Vector3(0, 0, 0);
+
+    const mouse = { down: false, btn: -1, lx: 0, ly: 0, rx: -0.3, ry: 0.85, d: 3, px: 0, py: 0 };
+
+    const el = renderer.domElement;
+    el.addEventListener("mousedown", e => { mouse.down = true; mouse.btn = e.button; mouse.lx = e.clientX; mouse.ly = e.clientY; });
+    window.addEventListener("mouseup", () => { mouse.down = false; });
+    el.addEventListener("mousemove", e => {
+      if (!mouse.down) return;
+      const dx = e.clientX - mouse.lx, dy = e.clientY - mouse.ly;
+      if (mouse.btn === 0) { mouse.ry += dx * 0.005; mouse.rx = Math.max(-1.5, Math.min(1.5, mouse.rx + dy * 0.005)); }
+      else if (mouse.btn === 2) { mouse.px -= dx * 0.005; mouse.py += dy * 0.005; }
+      mouse.lx = e.clientX; mouse.ly = e.clientY;
+    });
+    el.addEventListener("wheel", e => { mouse.d = Math.max(0.05, Math.min(50, mouse.d + e.deltaY * 0.002)); });
+    el.addEventListener("contextmenu", e => e.preventDefault());
+
+    let frame = null;
+    function animate() {
+      frame = requestAnimationFrame(animate);
+      const t = camera.userData.tgt || new THREE.Vector3();
+      camera.position.set(
+        t.x + mouse.px + mouse.d * Math.sin(mouse.ry) * Math.cos(mouse.rx),
+        t.y + mouse.py + mouse.d * Math.sin(mouse.rx),
+        t.z + mouse.d * Math.cos(mouse.ry) * Math.cos(mouse.rx)
+      );
+      camera.lookAt(t.x + mouse.px, t.y + mouse.py, t.z);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener("resize", () => {
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    viewerState = { scene, renderer, camera, mouse, linkage: null, frame, container };
+  }
+
+  function rebuildLinkage(sol, alphaFrac, showCells, thickness, hingePer, showRefFrames) {
+    if (!viewerState) return;
+    const s = viewerState;
+    if (s.linkage) { s.scene.remove(s.linkage); disposeGroup(s.linkage); }
+
+    const alpha = (sol.alpha_stow || 0) + alphaFrac * ((sol.alpha_deploy || 1) - (sol.alpha_stow || 0));
+    const deployC = compute2D(sol.long, sol.offset, sol.alpha_deploy || 1).c;
+    const longeronLen = 0.5 * deployC;
+    const { group, c } = buildScene(
+      sol.long, sol.offset, alpha, sol.n_cells,
+      thickness, sol.hinge_par, hingePer,
+      sol.short, sol.hinge_par, showCells, longeronLen, showRefFrames,
+      sol.width_actual || 0
+    );
+    s.linkage = group;
+    s.scene.add(group);
+    s.camera.userData.tgt = new THREE.Vector3(0, -c * Math.max(0, Math.min(showCells, sol.n_cells) - 1) / 2, 0);
+  }
+
+  // ── GIF recording ──
+  function captureFrame() {
+    if (!viewerState) return null;
+    const s = viewerState;
+    const t = s.camera.userData.tgt || new THREE.Vector3();
+    s.camera.position.set(
+      t.x + s.mouse.px + s.mouse.d * Math.sin(s.mouse.ry) * Math.cos(s.mouse.rx),
+      t.y + s.mouse.py + s.mouse.d * Math.sin(s.mouse.rx),
+      t.z + s.mouse.d * Math.cos(s.mouse.ry) * Math.cos(s.mouse.rx)
+    );
+    s.camera.lookAt(t.x + s.mouse.px, t.y + s.mouse.py, t.z);
+    s.renderer.setClearColor(0x000000, 0);
+    s.renderer.render(s.scene, s.camera);
+    const dataUrl = s.renderer.domElement.toDataURL("image/png");
+    s.renderer.setClearColor(0x12141a, 1);
+    return dataUrl;
+  }
+
+  window.viewerInit = initViewer;
+  window.viewerRebuild = rebuildLinkage;
+  window.viewerCaptureFrame = captureFrame;
+  window.getViewerState = function() { return viewerState; };
+})();
+
+  </script>
+
+  <script>
+    // ── Data ──
+    const ALL_PAYLOADS = [{"inputs": {"stow_width": 5.0, "stow_depth": 2.5, "expanded_depth": 70.0, "offset": 2.0, "thickness": 0.036}, "solution": {"long": 2.5811568281268333, "short": 2.5699663110972155, "offset": 2.0, "hinge_par": 0.01, "n_cells": 10, "alpha_stow": 0.062354518277249416, "alpha_deploy": 2.121909517553559, "beta_stow": 0.014098310787033417, "beta_deploy": 0.39735846213277676, "theta_deploy": 1.0471975511965976, "a_stow": 2.579902459788213, "b_stow": 2.569902459788213, "c_stow": 0.03623188370076225, "a_deploy": 1.2597051201034646, "b_deploy": 2.5194102402069296, "c_deploy": 1.0144927436213453, "width_stow": 5.1798049195764255, "depth_stow": 2.4999999753525954, "depth_deploy": 69.99999930987283, "thickness": 0.036, "extension_ratio_length": 1944.4444252742455, "extension_ratio_height": 6.61304750053888, "height_stow": 0.288, "height": 1.904557680155197, "length": 69.99999930987283, "width_actual": 5.179804919576426, "height_actual": 1.904557680155197, "depth_actual": 69.99999930987283, "objective": 2.4999999753525954}, "status": "optimal", "rounded_solution": {"long": 2.5812, "short": 2.57, "offset": 2.0, "hinge_par": 0.01, "thickness": 0.036, "n_cells": 10, "status": "check_residuals", "max_residual_m": 59.85431893671144, "max_residual_mm": 59854.31893671144, "residuals": {"cell_depth_match_stow": 2.216572984582721e-06, "cell_depth_match_deploy": 6.206403224506829e-05, "initial_state": 9.462827094353088e-06, "final_state": 9.112934330257616e-06, "initial_angle_beta": 4.520596362760868e-05, "stow_width": 0.17987229570798124, "stow_depth": -2.137654247739695, "expanded_depth": -59.85431893671144}, "residuals_mm": {"cell_depth_match_stow": 0.002216572984582721, "cell_depth_match_deploy": 0.06206403224506829, "initial_state": 0.009462827094353088, "final_state": 0.009112934330257616, "initial_angle_beta": 0.04520596362760868, "stow_width": 179.87229570798124, "stow_depth": -2137.6542477396947, "expanded_depth": -59854.31893671144}, "a_stow": 2.5799456106810847, "b_stow": 2.5699361478539906, "c_stow": 0.03623457522603049, "a_deploy": 1.2597261896599825, "b_deploy": 2.5194432663856348, "c_deploy": 1.0145681063288563, "width_stow": 5.179872295707981, "depth_stow": 0.3623457522603049, "depth_deploy": 10.145681063288563, "height": 1.2697125202421358, "length": 10.145681063288563, "width_actual": 5.179872295707981, "height_actual": 1.2697125202421358, "depth_actual": 10.145681063288563, "alpha_stow": 0.062354518277249416, "alpha_deploy": 2.121909517553559, "beta_stow": 0.014098310787033417, "beta_deploy": 0.39735846213277676}}, {"inputs": {"stow_width": 5.0, "stow_depth": 2.5, "expanded_depth": 70.0, "offset": 2.0, "thickness": 0.043}, "solution": {"long": 2.6900891726518523, "short": 2.678863678459159, "offset": 2.0, "hinge_par": 0.01, "n_cells": 10, "alpha_stow": 0.06247085064955359, "alpha_deploy": 2.1286005727782595, "beta_stow": 0.016090371890625555, "beta_deploy": 0.4544254724746649, "theta_deploy": 1.0471975511965976, "a_stow": 2.688776984178344, "b_stow": 2.678776984178344, "c_stow": 0.04310344784900755, "a_deploy": 1.3050058231037895, "b_deploy": 2.6100116462075795, "c_deploy": 1.2068965397722142, "width_stow": 5.3975539683566875, "depth_stow": 2.4999999752424378, "depth_deploy": 69.99999930678842, "thickness": 0.043, "extension_ratio_length": 1627.9069606229868, "extension_ratio_height": 5.734037019347921, "height_stow": 0.344, "height": 1.9725087346556847, "length": 69.99999930678842, "width_actual": 5.397553968356688, "height_actual": 1.9725087346556847, "depth_actual": 69.99999930678842, "objective": 2.4999999752424378}, "status": "optimal", "rounded_solution": {"long": 2.6901, "short": 2.6789, "offset": 2.0, "hinge_par": 0.01, "thickness": 0.043, "n_cells": 10, "status": "check_residuals", "max_residual_m": 57.9308452428511, "max_residual_mm": 57930.8452428511, "residuals": {"cell_depth_match_stow": 9.186325845844667e-08, "cell_depth_match_deploy": 2.5721604068884574e-06, "initial_state": -2.5498298675152853e-05, "final_state": -2.4882962387007268e-05, "initial_angle_beta": 1.9416975142051707e-05, "stow_width": 0.3976266090874718, "stow_depth": -2.0689587586732547, "expanded_depth": -57.9308452428511}, "residuals_mm": {"cell_depth_match_stow": 9.186325845844667e-05, "cell_depth_match_deploy": 0.0025721604068884574, "initial_state": -0.025498298675152853, "final_state": -0.024882962387007268, "initial_angle_beta": 0.019416975142051707, "stow_width": 397.6266090874718, "stow_depth": -2068.9587586732546, "expanded_depth": -57930.8452428511}, "a_stow": 2.6887878062450605, "b_stow": 2.678813304543736, "c_stow": 0.04310412413267454, "a_deploy": 1.3050110756257227, "b_deploy": 2.6100470342138324, "c_deploy": 1.2069154757148899, "width_stow": 5.397626609087472, "depth_stow": 0.4310412413267454, "depth_deploy": 12.0691547571489, "height": 1.315048399951594, "length": 12.0691547571489, "width_actual": 5.397626609087472, "height_actual": 1.315048399951594, "depth_actual": 12.0691547571489, "alpha_stow": 0.06247085064955359, "alpha_deploy": 2.1286005727782595, "beta_stow": 0.016090371890625555, "beta_deploy": 0.4544254724746649}}, {"inputs": {"stow_width": 5.0, "stow_depth": 2.5, "expanded_depth": 70.0, "offset": 1.7285714285714286, "thickness": 0.05}, "solution": {"long": 2.5255692712352653, "short": 2.514438897979652, "offset": 1.7285714285714286, "hinge_par": 0.01, "n_cells": 10, "alpha_stow": 0.06274598052478142, "alpha_deploy": 2.144572846115959, "beta_stow": 0.019885649246688616, "beta_deploy": 0.5642393048819343, "theta_deploy": 1.047197551084985, "a_stow": 2.524315960359703, "b_stow": 2.5143143403459245, "c_stow": 0.04999999998214263, "a_deploy": 1.2075184231491762, "b_deploy": 2.415036846533722, "c_deploy": 1.399999999523605, "width_stow": 5.0686319207194055, "depth_stow": 2.4999999991071316, "depth_deploy": 69.99999997618025, "thickness": 0.05, "extension_ratio_length": 1399.9999995236049, "extension_ratio_height": 4.565694087544941, "height_stow": 0.4, "height": 1.8262776350179764, "length": 69.99999997618025, "width_actual": 5.068628680691849, "height_actual": 1.8262776350179764, "depth_actual": 69.99999997618025, "objective": 2.4999999991071316}, "status": "optimal", "rounded_solution": {"long": 2.5256, "short": 2.5144, "offset": 1.7286, "hinge_par": 0.01, "thickness": 0.05, "n_cells": 10, "status": "check_residuals", "max_residual_m": 55.999962117960074, "max_residual_mm": 55999.96211796007, "residuals": {"cell_depth_match_stow": 6.906449015672833e-07, "cell_depth_match_deploy": 2.5446258822281465e-05, "initial_state": 8.145817915305997e-05, "final_state": 6.674204139267559e-05, "initial_angle_beta": -6.907597244372454e-08, "stow_width": 0.06855142906352363, "stow_depth": -1.9999965672434865, "expanded_depth": -55.999962117960074}, "residuals_mm": {"cell_depth_match_stow": 0.0006906449015672833, "cell_depth_match_deploy": 0.025446258822281465, "initial_state": 0.08145817915305997, "final_state": 0.06674204139267559, "initial_angle_beta": -6.907597244372454e-05, "stow_width": 68.55142906352363, "stow_depth": -1999.9965672434864, "expanded_depth": -55999.96211796007}, "a_stow": 2.5243571727109146, "b_stow": 2.514275714531762, "c_stow": 0.050000343275651345, "a_deploy": 1.207533114345836, "b_deploy": 2.4149994866502795, "c_deploy": 1.4000037882039928, "width_stow": 5.068551429063524, "depth_stow": 0.5000034327565135, "depth_deploy": 14.000037882039928, "height": 1.2174330003690652, "length": 14.000037882039928, "width_actual": 5.068551429063524, "height_actual": 1.2174330003690652, "depth_actual": 14.000037882039928, "alpha_stow": 0.06274598052478142, "alpha_deploy": 2.144572846115959, "beta_stow": 0.019885649246688616, "beta_deploy": 0.5642393048819343}}, {"inputs": {"stow_width": 5.0, "stow_depth": 2.5, "expanded_depth": 70.0, "offset": 2.0, "thickness": 0.05}, "solution": {"long": 2.7989473022776905, "short": 2.7876887917022706, "offset": 2.0, "hinge_par": 0.01, "n_cells": 10, "alpha_stow": 0.0625925677330626, "alpha_deploy": 2.135644797645849, "beta_stow": 0.01793624538753761, "beta_deploy": 0.5076414032554166, "theta_deploy": 1.0471975511964895, "a_stow": 2.7975766894176526, "b_stow": 2.787576689429053, "c_stow": 0.05000000005645185, "a_deploy": 1.3491857542885033, "b_deploy": 2.6983715085772615, "c_deploy": 1.4000000015806437, "width_stow": 5.615153378835305, "depth_stow": 2.500000002822593, "depth_deploy": 70.00000007903219, "thickness": 0.05, "extension_ratio_length": 1400.0000015806438, "extension_ratio_height": 5.096946578582684, "height_stow": 0.4, "height": 2.0387786314330736, "length": 70.00000007903219, "width_actual": 5.615153378858106, "height_actual": 2.0387786314330736, "depth_actual": 70.00000007903219, "objective": 2.500000002822593}, "status": "optimal", "rounded_solution": {"long": 2.7989, "short": 2.7877, "offset": 2.0, "hinge_par": 0.01, "thickness": 0.05, "n_cells": 10, "status": "check_residuals", "max_residual_m": 56.000828864793476, "max_residual_mm": 56000.828864793475, "residuals": {"cell_depth_match_stow": -3.1612633972916138e-06, "cell_depth_match_deploy": -8.851693507039293e-05, "initial_state": -5.848702510080628e-05, "final_state": -5.645173523882718e-05, "initial_angle_beta": 3.605678208611074e-08, "stow_width": 0.6151757945285334, "stow_depth": -2.0000296023241444, "expanded_depth": -56.000828864793476}, "residuals_mm": {"cell_depth_match_stow": -0.0031612633972916138, "cell_depth_match_deploy": -0.08851693507039293, "initial_state": -0.05848702510080628, "final_state": -0.05645173523882718, "initial_angle_beta": 3.605678208611074e-05, "stow_width": 615.1757945285334, "stow_depth": -2000.0296023241444, "expanded_depth": -56000.828864793475}, "a_stow": 2.7975294102391657, "b_stow": 2.7875878972642667, "c_stow": 0.04999703976758555, "a_deploy": 1.3491629530126263, "b_deploy": 2.6983823577604915, "c_deploy": 1.3999171135206523, "width_stow": 5.615175794528533, "depth_stow": 0.4999703976758555, "depth_deploy": 13.999171135206524, "height": 1.3592476300293275, "length": 13.999171135206524, "width_actual": 5.615175794528533, "height_actual": 1.3592476300293275, "depth_actual": 13.999171135206524, "alpha_stow": 0.0625925677330626, "alpha_deploy": 2.135644797645849, "beta_stow": 0.01793624538753761, "beta_deploy": 0.5076414032554166}}];
+    const fig = {"data":[{"customdata":[[0.036,2.0,10,2.5811568281268333,2.5699663110972155,0.01,0]],"hovertemplate":"x=%{x:.4f}\u003cbr\u003ey=%{y:.4f}\u003cbr\u003ethickness=%{customdata[0]:.3f}\u003cbr\u003eoffset=%{customdata[1]:.5f}\u003cbr\u003en_cells=%{customdata[2]}\u003cbr\u003elong=%{customdata[3]:.4f}\u003cbr\u003eshort=%{customdata[4]:.4f}\u003cbr\u003ehinge=%{customdata[5]:.4f}\u003cextra\u003e\u003c\u002fextra\u003e","marker":{"size":8},"mode":"markers","name":"t=0.036","visible":true,"x":[1944.4444252742455],"y":[6.61304750053888],"type":"scatter"},{"customdata":[[0.036,2.0,10,2.5811568281268333,2.5699663110972155,0.01,0]],"hovertemplate":"x=%{x:.4f}\u003cbr\u003ey=%{y:.4f}\u003cbr\u003ethickness=%{customdata[0]:.3f}\u003cbr\u003eoffset=%{customdata[1]:.5f}\u003cbr\u003en_cells=%{customdata[2]}\u003cbr\u003elong=%{customdata[3]:.4f}\u003cbr\u003eshort=%{customdata[4]:.4f}\u003cbr\u003ehinge=%{customdata[5]:.4f}\u003cextra\u003e\u003c\u002fextra\u003e","marker":{"size":8},"mode":"markers","name":"t=0.036","visible":false,"x":[69.99999930987283],"y":[1.904557680155197],"type":"scatter"},{"customdata":[[0.043,2.0,10,2.6900891726518523,2.678863678459159,0.01,1]],"hovertemplate":"x=%{x:.4f}\u003cbr\u003ey=%{y:.4f}\u003cbr\u003ethickness=%{customdata[0]:.3f}\u003cbr\u003eoffset=%{customdata[1]:.5f}\u003cbr\u003en_cells=%{customdata[2]}\u003cbr\u003elong=%{customdata[3]:.4f}\u003cbr\u003eshort=%{customdata[4]:.4f}\u003cbr\u003ehinge=%{customdata[5]:.4f}\u003cextra\u003e\u003c\u002fextra\u003e","marker":{"size":8},"mode":"markers","name":"t=0.043","visible":true,"x":[1627.9069606229868],"y":[5.734037019347921],"type":"scatter"},{"customdata":[[0.043,2.0,10,2.6900891726518523,2.678863678459159,0.01,1]],"hovertemplate":"x=%{x:.4f}\u003cbr\u003ey=%{y:.4f}\u003cbr\u003ethickness=%{customdata[0]:.3f}\u003cbr\u003eoffset=%{customdata[1]:.5f}\u003cbr\u003en_cells=%{customdata[2]}\u003cbr\u003elong=%{customdata[3]:.4f}\u003cbr\u003eshort=%{customdata[4]:.4f}\u003cbr\u003ehinge=%{customdata[5]:.4f}\u003cextra\u003e\u003c\u002fextra\u003e","marker":{"size":8},"mode":"markers","name":"t=0.043","visible":false,"x":[69.99999930678842],"y":[1.9725087346556847],"type":"scatter"},{"customdata":[[0.05,1.7285714285714286,10,2.5255692712352653,2.514438897979652,0.01,2],[0.05,2.0,10,2.7989473022776905,2.7876887917022706,0.01,3]],"hovertemplate":"x=%{x:.4f}\u003cbr\u003ey=%{y:.4f}\u003cbr\u003ethickness=%{customdata[0]:.3f}\u003cbr\u003eoffset=%{customdata[1]:.5f}\u003cbr\u003en_cells=%{customdata[2]}\u003cbr\u003elong=%{customdata[3]:.4f}\u003cbr\u003eshort=%{customdata[4]:.4f}\u003cbr\u003ehinge=%{customdata[5]:.4f}\u003cextra\u003e\u003c\u002fextra\u003e","marker":{"size":8},"mode":"markers","name":"t=0.050","visible":true,"x":[1399.9999995236049,1400.0000015806438],"y":[4.565694087544941,5.096946578582684],"type":"scatter"},{"customdata":[[0.05,1.7285714285714286,10,2.5255692712352653,2.514438897979652,0.01,2],[0.05,2.0,10,2.7989473022776905,2.7876887917022706,0.01,3]],"hovertemplate":"x=%{x:.4f}\u003cbr\u003ey=%{y:.4f}\u003cbr\u003ethickness=%{customdata[0]:.3f}\u003cbr\u003eoffset=%{customdata[1]:.5f}\u003cbr\u003en_cells=%{customdata[2]}\u003cbr\u003elong=%{customdata[3]:.4f}\u003cbr\u003eshort=%{customdata[4]:.4f}\u003cbr\u003ehinge=%{customdata[5]:.4f}\u003cextra\u003e\u003c\u002fextra\u003e","marker":{"size":8},"mode":"markers","name":"t=0.050","visible":false,"x":[69.99999997618025,70.00000007903219],"y":[1.8262776350179764,2.0387786314330736],"type":"scatter"}],"layout":{"template":{"data":{"histogram2dcontour":[{"type":"histogram2dcontour","colorbar":{"outlinewidth":0,"ticks":""},"colorscale":[[0.0,"#0d0887"],[0.1111111111111111,"#46039f"],[0.2222222222222222,"#7201a8"],[0.3333333333333333,"#9c179e"],[0.4444444444444444,"#bd3786"],[0.5555555555555556,"#d8576b"],[0.6666666666666666,"#ed7953"],[0.7777777777777778,"#fb9f3a"],[0.8888888888888888,"#fdca26"],[1.0,"#f0f921"]]}],"choropleth":[{"type":"choropleth","colorbar":{"outlinewidth":0,"ticks":""}}],"histogram2d":[{"type":"histogram2d","colorbar":{"outlinewidth":0,"ticks":""},"colorscale":[[0.0,"#0d0887"],[0.1111111111111111,"#46039f"],[0.2222222222222222,"#7201a8"],[0.3333333333333333,"#9c179e"],[0.4444444444444444,"#bd3786"],[0.5555555555555556,"#d8576b"],[0.6666666666666666,"#ed7953"],[0.7777777777777778,"#fb9f3a"],[0.8888888888888888,"#fdca26"],[1.0,"#f0f921"]]}],"heatmap":[{"type":"heatmap","colorbar":{"outlinewidth":0,"ticks":""},"colorscale":[[0.0,"#0d0887"],[0.1111111111111111,"#46039f"],[0.2222222222222222,"#7201a8"],[0.3333333333333333,"#9c179e"],[0.4444444444444444,"#bd3786"],[0.5555555555555556,"#d8576b"],[0.6666666666666666,"#ed7953"],[0.7777777777777778,"#fb9f3a"],[0.8888888888888888,"#fdca26"],[1.0,"#f0f921"]]}],"contourcarpet":[{"type":"contourcarpet","colorbar":{"outlinewidth":0,"ticks":""}}],"contour":[{"type":"contour","colorbar":{"outlinewidth":0,"ticks":""},"colorscale":[[0.0,"#0d0887"],[0.1111111111111111,"#46039f"],[0.2222222222222222,"#7201a8"],[0.3333333333333333,"#9c179e"],[0.4444444444444444,"#bd3786"],[0.5555555555555556,"#d8576b"],[0.6666666666666666,"#ed7953"],[0.7777777777777778,"#fb9f3a"],[0.8888888888888888,"#fdca26"],[1.0,"#f0f921"]]}],"surface":[{"type":"surface","colorbar":{"outlinewidth":0,"ticks":""},"colorscale":[[0.0,"#0d0887"],[0.1111111111111111,"#46039f"],[0.2222222222222222,"#7201a8"],[0.3333333333333333,"#9c179e"],[0.4444444444444444,"#bd3786"],[0.5555555555555556,"#d8576b"],[0.6666666666666666,"#ed7953"],[0.7777777777777778,"#fb9f3a"],[0.8888888888888888,"#fdca26"],[1.0,"#f0f921"]]}],"mesh3d":[{"type":"mesh3d","colorbar":{"outlinewidth":0,"ticks":""}}],"scatter":[{"fillpattern":{"fillmode":"overlay","size":10,"solidity":0.2},"type":"scatter"}],"parcoords":[{"type":"parcoords","line":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"scatterpolargl":[{"type":"scatterpolargl","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"bar":[{"error_x":{"color":"#2a3f5f"},"error_y":{"color":"#2a3f5f"},"marker":{"line":{"color":"#E5ECF6","width":0.5},"pattern":{"fillmode":"overlay","size":10,"solidity":0.2}},"type":"bar"}],"scattergeo":[{"type":"scattergeo","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"scatterpolar":[{"type":"scatterpolar","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"histogram":[{"marker":{"pattern":{"fillmode":"overlay","size":10,"solidity":0.2}},"type":"histogram"}],"scattergl":[{"type":"scattergl","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"scatter3d":[{"type":"scatter3d","line":{"colorbar":{"outlinewidth":0,"ticks":""}},"marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"scattermap":[{"type":"scattermap","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"scattermapbox":[{"type":"scattermapbox","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"scatterternary":[{"type":"scatterternary","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"scattercarpet":[{"type":"scattercarpet","marker":{"colorbar":{"outlinewidth":0,"ticks":""}}}],"carpet":[{"aaxis":{"endlinecolor":"#2a3f5f","gridcolor":"white","linecolor":"white","minorgridcolor":"white","startlinecolor":"#2a3f5f"},"baxis":{"endlinecolor":"#2a3f5f","gridcolor":"white","linecolor":"white","minorgridcolor":"white","startlinecolor":"#2a3f5f"},"type":"carpet"}],"table":[{"cells":{"fill":{"color":"#EBF0F8"},"line":{"color":"white"}},"header":{"fill":{"color":"#C8D4E3"},"line":{"color":"white"}},"type":"table"}],"barpolar":[{"marker":{"line":{"color":"#E5ECF6","width":0.5},"pattern":{"fillmode":"overlay","size":10,"solidity":0.2}},"type":"barpolar"}],"pie":[{"automargin":true,"type":"pie"}]},"layout":{"autotypenumbers":"strict","colorway":["#636efa","#EF553B","#00cc96","#ab63fa","#FFA15A","#19d3f3","#FF6692","#B6E880","#FF97FF","#FECB52"],"font":{"color":"#2a3f5f"},"hovermode":"closest","hoverlabel":{"align":"left"},"paper_bgcolor":"white","plot_bgcolor":"#E5ECF6","polar":{"bgcolor":"#E5ECF6","angularaxis":{"gridcolor":"white","linecolor":"white","ticks":""},"radialaxis":{"gridcolor":"white","linecolor":"white","ticks":""}},"ternary":{"bgcolor":"#E5ECF6","aaxis":{"gridcolor":"white","linecolor":"white","ticks":""},"baxis":{"gridcolor":"white","linecolor":"white","ticks":""},"caxis":{"gridcolor":"white","linecolor":"white","ticks":""}},"coloraxis":{"colorbar":{"outlinewidth":0,"ticks":""}},"colorscale":{"sequential":[[0.0,"#0d0887"],[0.1111111111111111,"#46039f"],[0.2222222222222222,"#7201a8"],[0.3333333333333333,"#9c179e"],[0.4444444444444444,"#bd3786"],[0.5555555555555556,"#d8576b"],[0.6666666666666666,"#ed7953"],[0.7777777777777778,"#fb9f3a"],[0.8888888888888888,"#fdca26"],[1.0,"#f0f921"]],"sequentialminus":[[0.0,"#0d0887"],[0.1111111111111111,"#46039f"],[0.2222222222222222,"#7201a8"],[0.3333333333333333,"#9c179e"],[0.4444444444444444,"#bd3786"],[0.5555555555555556,"#d8576b"],[0.6666666666666666,"#ed7953"],[0.7777777777777778,"#fb9f3a"],[0.8888888888888888,"#fdca26"],[1.0,"#f0f921"]],"diverging":[[0,"#8e0152"],[0.1,"#c51b7d"],[0.2,"#de77ae"],[0.3,"#f1b6da"],[0.4,"#fde0ef"],[0.5,"#f7f7f7"],[0.6,"#e6f5d0"],[0.7,"#b8e186"],[0.8,"#7fbc41"],[0.9,"#4d9221"],[1,"#276419"]]},"xaxis":{"gridcolor":"white","linecolor":"white","ticks":"","title":{"standoff":15},"zerolinecolor":"white","automargin":true,"zerolinewidth":2},"yaxis":{"gridcolor":"white","linecolor":"white","ticks":"","title":{"standoff":15},"zerolinecolor":"white","automargin":true,"zerolinewidth":2},"scene":{"xaxis":{"backgroundcolor":"#E5ECF6","gridcolor":"white","linecolor":"white","showbackground":true,"ticks":"","zerolinecolor":"white","gridwidth":2},"yaxis":{"backgroundcolor":"#E5ECF6","gridcolor":"white","linecolor":"white","showbackground":true,"ticks":"","zerolinecolor":"white","gridwidth":2},"zaxis":{"backgroundcolor":"#E5ECF6","gridcolor":"white","linecolor":"white","showbackground":true,"ticks":"","zerolinecolor":"white","gridwidth":2}},"shapedefaults":{"line":{"color":"#2a3f5f"}},"annotationdefaults":{"arrowcolor":"#2a3f5f","arrowhead":0,"arrowwidth":1},"geo":{"bgcolor":"white","landcolor":"#E5ECF6","subunitcolor":"white","showland":true,"showlakes":true,"lakecolor":"white"},"title":{"x":0.05},"mapbox":{"style":"light"}}},"margin":{"t":90},"title":{"text":"Scissor sweep — click a point to visualize in 3D"},"xaxis":{"title":{"text":"Extension ratio (length) [–]"}},"yaxis":{"title":{"text":"Extension ratio (height) [–]"}},"updatemenus":[{"buttons":[{"args":[{"visible":[true,false,true,false,true,false]},{"xaxis":{"title":"Extension ratio (length) [–]"},"yaxis":{"title":"Extension ratio (height) [–]"}}],"label":"Extension ratios","method":"update"},{"args":[{"visible":[false,true,false,true,false,true]},{"xaxis":{"title":"Deployed depth [m]"},"yaxis":{"title":"Deployed height [m]"}}],"label":"Actual (Deployed depth [m] vs Deployed height [m])","method":"update"}],"direction":"left","type":"buttons","x":0.0,"y":1.15}],"legend":{"title":{"text":"Thickness [m]"}}}};
+
+    // ── State ──
+    let currentSol = null;
+    let viewerReady = false;
+
+    // ── Dark mode for plot ──
+    Object.assign(fig.layout, {
+      paper_bgcolor: "#090b10",
+      plot_bgcolor: "#0d0f14",
+      font: { color: "#ccc", family: "'JetBrains Mono', monospace" },
+    });
+    if (fig.layout.xaxis) Object.assign(fig.layout.xaxis, { gridcolor: "#1f222b", zerolinecolor: "#1f222b", color: "#888" });
+    if (fig.layout.yaxis) Object.assign(fig.layout.yaxis, { gridcolor: "#1f222b", zerolinecolor: "#1f222b", color: "#888" });
+    if (fig.layout.legend) Object.assign(fig.layout.legend, { bgcolor: "rgba(0,0,0,0)", font: { color: "#999" } });
+
+    // ── Plot ──
+    Plotly.newPlot("plotDiv", fig.data, fig.layout, { responsive: true });
+
+    // ── Click handler ──
+    document.getElementById("plotDiv").on("plotly_click", function(evt) {
+      const pt = evt.points[0];
+      const payloadIdx = pt.customdata[6];
+      const payload = ALL_PAYLOADS[payloadIdx];
+      if (!payload) return;
+
+      currentSol = payload.solution;
+      currentPayload = payload;
+
+      document.getElementById("jsonPanel").textContent = JSON.stringify(payload, null, 2);
+
+      const ov = document.getElementById("viewerOverlay");
+      ov.style.display = "block";
+      document.getElementById("overlayContent").innerHTML =
+        '<div class="kv"><span class="k">long</span><span class="v">' + currentSol.long.toFixed(4) + '</span></div>' +
+        '<div class="kv"><span class="k">short</span><span class="v">' + currentSol.short.toFixed(4) + '</span></div>' +
+        '<div class="kv"><span class="k">offset</span><span class="v">' + currentSol.offset.toFixed(4) + '</span></div>' +
+        '<div class="kv"><span class="k">hinge_par</span><span class="v">' + currentSol.hinge_par.toFixed(4) + '</span></div>' +
+        '<div class="kv"><span class="k">n_cells</span><span class="v">' + currentSol.n_cells + '</span></div>' +
+        '<div class="kv"><span class="k">&alpha; deploy</span><span class="v">' + (currentSol.alpha_deploy * 180/Math.PI).toFixed(1) + '&deg;</span></div>' +
+        '<div class="kv"><span class="k">thickness</span><span class="v">' + currentSol.thickness.toFixed(3) + '</span></div>';
+
+      document.getElementById("cellsSlider").max = currentSol.n_cells;
+      if (parseInt(document.getElementById("cellsSlider").value) > currentSol.n_cells) {
+        document.getElementById("cellsSlider").value = Math.min(2, currentSol.n_cells);
+      }
+
+      if (!viewerReady) {
+        document.getElementById("placeholder3d").style.display = "none";
+        window.viewerInit(document.getElementById("viewerMount"));
+        viewerReady = true;
+      }
+
+      // Enable GIF + GLB buttons
+      document.getElementById("gifBtn").disabled = false;
+      document.getElementById("glbBtn").disabled = false;
+      document.getElementById("glbAnimBtn").disabled = false;
+
+      rebuildFromUI();
+      updateCsvPreview();
+    });
+
+    function rebuildFromUI() {
+      if (!currentSol) return;
+      const alphaFrac = parseFloat(document.getElementById("alphaSlider").value);
+      const thickness = parseFloat(document.getElementById("thicknessSlider").value);
+      const hingePer = parseFloat(document.getElementById("hingePerSlider").value);
+      const showCells = parseInt(document.getElementById("cellsSlider").value);
+      const showRefFrames = document.getElementById("refFrameToggle").checked;
+      window.viewerRebuild(currentSol, alphaFrac, showCells, thickness, hingePer, showRefFrames);
+    }
+
+    // ── Sliders ──
+    document.getElementById("alphaSlider").addEventListener("input", function() {
+      document.getElementById("alphaVal").textContent = (this.value * 100).toFixed(0) + "%";
+      rebuildFromUI();
+    });
+    document.getElementById("thicknessSlider").addEventListener("input", function() {
+      document.getElementById("thicknessVal").textContent = parseFloat(this.value).toFixed(4);
+      rebuildFromUI();
+    });
+    document.getElementById("cellsSlider").addEventListener("input", function() {
+      document.getElementById("cellsVal").textContent = this.value;
+      rebuildFromUI();
+    });
+    document.getElementById("refFrameToggle").addEventListener("change", function() {
+      rebuildFromUI();
+    });
+
+    // ── GLB Export ──
+    document.getElementById("glbBtn").addEventListener("click", function() {
+      var viewerState = window.getViewerState();
+      if (!viewerState || !viewerState.linkage) return;
+      const statusEl = document.getElementById("glbStatus");
+      statusEl.textContent = "Exporting...";
+      statusEl.style.color = "#44bb44";
+      const exporter = new THREE.GLTFExporter();
+      exporter.parse(viewerState.linkage, function(result) {
+        const blob = new Blob([result], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "scissor_linkage.glb";
+        a.click();
+        URL.revokeObjectURL(url);
+        statusEl.textContent = "Downloaded scissor_linkage.glb";
+        setTimeout(function() { statusEl.textContent = ""; }, 3000);
+      }, { binary: true });
+    });
+
+    // ── Animated GLB ZIP Export ──
+    document.getElementById("glbAnimBtn").addEventListener("click", async function() {
+      if (!currentSol || !viewerReady) return;
+      const btn = this;
+      const statusEl = document.getElementById("glbAnimStatus");
+      btn.disabled = true;
+      btn.textContent = "Exporting...";
+      statusEl.textContent = "";
+      statusEl.style.color = "#44bb44";
+
+      const nFrames = parseInt(document.getElementById("glbAnimFrames").value) || 30;
+      const thickness = parseFloat(document.getElementById("thicknessSlider").value);
+      const hingePer = parseFloat(document.getElementById("hingePerSlider").value);
+      const showCells = parseInt(document.getElementById("cellsSlider").value);
+      const showRefFrames = document.getElementById("refFrameToggle").checked;
+      const exporter = new THREE.GLTFExporter();
+      const zip = new JSZip();
+
+      function exportFrame(frac) {
+        return new Promise(function(resolve) {
+          window.viewerRebuild(currentSol, frac, showCells, thickness, hingePer, showRefFrames);
+          var vs = window.getViewerState();
+          exporter.parse(vs.linkage, function(result) {
+            resolve(result);
+          }, { binary: true });
+        });
+      }
+
+      try {
+        for (let i = 0; i < nFrames; i++) {
+          const frac = i / (nFrames - 1);
+          statusEl.textContent = "Frame " + (i + 1) + " / " + nFrames;
+          const glb = await exportFrame(frac);
+          const padded = String(i).padStart(4, "0");
+          zip.file("frame_" + padded + ".glb", glb);
+        }
+
+        // Add Blender import script
+        const blenderScript = `import bpy
+import os
+import glob
+
+# ── Scissor Linkage Animation Importer ──
+# Run this script in Blender's Scripting workspace.
+# Set FOLDER to the directory where you extracted the .glb frames.
+
+FOLDER = r"/path/to/extracted/frames"  # <-- EDIT THIS
+FPS = 24
+
+# Find all frame GLB files
+files = sorted(glob.glob(os.path.join(FOLDER, "frame_*.glb")))
+if not files:
+    raise FileNotFoundError(f"No frame_*.glb files found in {FOLDER}")
+
+n_frames = len(files)
+print(f"Importing {n_frames} frames...")
+
+bpy.context.scene.render.fps = FPS
+bpy.context.scene.frame_start = 1
+bpy.context.scene.frame_end = n_frames
+
+# Import each frame, hide on non-active frames
+collections = []
+for i, filepath in enumerate(files):
+    frame_num = i + 1
+    col_name = f"Frame_{frame_num:04d}"
+    col = bpy.data.collections.new(col_name)
+    bpy.context.scene.collection.children.link(col)
+
+    # Set active collection for import
+    layer_collection = bpy.context.view_layer.layer_collection.children[col_name]
+    bpy.context.view_layer.active_layer_collection = layer_collection
+
+    bpy.ops.import_scene.gltf(filepath=filepath)
+
+    # Move imported objects to our collection
+    for obj in bpy.context.selected_objects:
+        for old_col in obj.users_collection:
+            old_col.objects.unlink(obj)
+        col.objects.link(obj)
+
+    collections.append(col)
+
+# Keyframe visibility: each collection visible only on its frame
+for i, col in enumerate(collections):
+    frame_num = i + 1
+    for obj in col.all_objects:
+        # Hide on all frames by default
+        obj.hide_viewport = True
+        obj.hide_render = True
+        obj.keyframe_insert("hide_viewport", frame=1)
+        obj.keyframe_insert("hide_render", frame=1)
+
+        # Show on this frame
+        obj.hide_viewport = False
+        obj.hide_render = False
+        obj.keyframe_insert("hide_viewport", frame=frame_num)
+        obj.keyframe_insert("hide_render", frame=frame_num)
+
+        # Hide again on next frame
+        if frame_num < n_frames:
+            obj.hide_viewport = True
+            obj.hide_render = True
+            obj.keyframe_insert("hide_viewport", frame=frame_num + 1)
+            obj.keyframe_insert("hide_render", frame=frame_num + 1)
+
+        # Set interpolation to constant (step) for hide properties
+        if obj.animation_data and obj.animation_data.action:
+            for fc in obj.animation_data.action.fcurves:
+                for kp in fc.keyframe_points:
+                    kp.interpolation = 'CONSTANT'
+
+bpy.context.scene.frame_set(1)
+print(f"Done! {n_frames} frames imported. Press Space to play.")
+`;
+        zip.file("import_animation.py", blenderScript);
+
+        statusEl.textContent = "Compressing ZIP...";
+        const blob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "scissor_animation.zip";
+        a.click();
+        URL.revokeObjectURL(url);
+        statusEl.textContent = "Downloaded scissor_animation.zip (" + nFrames + " frames)";
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+        statusEl.style.color = "#f87171";
+      }
+
+      // Restore current slider position
+      rebuildFromUI();
+      btn.disabled = false;
+      btn.textContent = "Export Animation .ZIP";
+    });
+
+    // ── GIF Recording ──
+    let gifRecording = false;
+    let gifWorkerBlobUrl = null;
+
+    // Pre-fetch the gif.js worker source and create a blob URL to avoid cross-origin Worker restriction
+    async function ensureGifWorker() {
+      if (gifWorkerBlobUrl) return gifWorkerBlobUrl;
+      const resp = await fetch("https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js");
+      const text = await resp.text();
+      const blob = new Blob([text], { type: "application/javascript" });
+      gifWorkerBlobUrl = URL.createObjectURL(blob);
+      return gifWorkerBlobUrl;
+    }
+
+    // Also need the gif.js library itself
+    async function loadGifJs() {
+      if (window.GIF) return;
+      return new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js";
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    document.getElementById("gifBtn").addEventListener("click", async function() {
+      if (!currentSol || !viewerReady || gifRecording) return;
+      gifRecording = true;
+      const btn = this;
+      const statusEl = document.getElementById("gifStatus");
+      btn.disabled = true;
+      btn.textContent = "Recording...";
+      statusEl.textContent = "Loading encoder...";
+      statusEl.style.color = "#88aacc";
+      statusEl.style.opacity = 1;
+
+      try {
+        await loadGifJs();
+        const workerUrl = await ensureGifWorker();
+
+        const nFrames = parseInt(document.getElementById("gifFrames").value) || 60;
+        const delay = parseInt(document.getElementById("gifDelay").value) || 33;
+        const thickness = parseFloat(document.getElementById("thicknessSlider").value);
+        const hingePer = parseFloat(document.getElementById("hingePerSlider").value);
+        const showCells = parseInt(document.getElementById("cellsSlider").value);
+        const showRefFrames = document.getElementById("refFrameToggle").checked;
+
+        // Collect PNG frames
+        const frames = [];
+        for (let f = 0; f <= nFrames; f++) {
+          const frac = f / nFrames;
+          window.viewerRebuild(currentSol, frac, showCells, thickness, hingePer, showRefFrames);
+          const dataUrl = window.viewerCaptureFrame();
+          if (dataUrl) frames.push(dataUrl);
+          statusEl.textContent = "Capturing frame " + (f + 1) + " / " + (nFrames + 1);
+          await new Promise(r => setTimeout(r, 10));
+        }
+
+        statusEl.textContent = "Encoding GIF (" + frames.length + " frames)...";
+
+        const firstImg = new Image();
+        await new Promise((resolve) => {
+          firstImg.onload = resolve;
+          firstImg.src = frames[0];
+        });
+        const W = firstImg.naturalWidth;
+        const H = firstImg.naturalHeight;
+
+        const gif = new GIF({
+          workers: 2,
+          workerScript: workerUrl,
+          width: W,
+          height: H,
+          transparent: 0x000000,
+          quality: 10,
+        });
+
+        for (let i = 0; i < frames.length; i++) {
+          const img = new Image();
+          await new Promise((resolve) => {
+            img.onload = resolve;
+            img.src = frames[i];
+          });
+          const cvs = document.createElement("canvas");
+          cvs.width = W; cvs.height = H;
+          const ctx = cvs.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          gif.addFrame(ctx, { copy: true, delay: delay });
+        }
+
+        gif.on("finished", function(blob) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "scissor_deployment.gif";
+          a.style.display = "none";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          statusEl.textContent = "\u2713 Exported scissor_deployment.gif (" + frames.length + " frames, transparent background)";
+          statusEl.style.color = "#44bb44";
+          btn.textContent = "Record Deployment GIF";
+          btn.disabled = false;
+          gifRecording = false;
+
+          rebuildFromUI();
+        });
+
+        gif.on("progress", function(p) {
+          statusEl.textContent = "Encoding GIF... " + Math.round(p * 100) + "%";
+        });
+
+        gif.render();
+      } catch (err) {
+        statusEl.textContent = "\u2716 GIF export failed: " + err.message;
+        statusEl.style.color = "#f87171";
+        btn.textContent = "Record Deployment GIF";
+        btn.disabled = false;
+        gifRecording = false;
+      }
+    });
+
+    // ── CSV Export ──
+    let currentPayload = null;
+    let currentRounded = null;
+
+    function updateCsvPreview() {
+      if (!currentPayload) return;
+      const sol = currentPayload.solution;
+      const rd = currentPayload.rounded_solution;
+      currentRounded = rd;
+
+      const statusEl = document.getElementById("roundedStatus");
+      const tbody = document.getElementById("csvTableBody");
+      const exportBtn = document.getElementById("exportBtn");
+
+      if (!rd) {
+        statusEl.innerHTML = '<span style="color:#f87171;">No rounding data</span>';
+        exportBtn.disabled = true;
+        return;
+      }
+
+      const maxErr = rd.max_residual_mm || 0;
+      const res = rd.residuals_mm || {};
+
+      if (maxErr < 0.01) {
+        statusEl.innerHTML = '<span style="color:#44bb44;">\u2713 Max rounding error: ' + maxErr.toFixed(6) + ' mm \u2014 negligible</span>';
+      } else if (maxErr < 0.1) {
+        statusEl.innerHTML = '<span style="color:#c8b88a;">\u26A0 Max rounding error: ' + maxErr.toFixed(4) + ' mm \u2014 small</span>';
+      } else {
+        statusEl.innerHTML = '<span style="color:#f87171;">\u26A0 Max rounding error: ' + maxErr.toFixed(4) + ' mm \u2014 review constraints below</span>';
+      }
+      exportBtn.disabled = false;
+
+      let html = '<tr style="color:#555;"><td colspan="3" style="padding:4px 4px 2px;font-size:8px;text-transform:uppercase;letter-spacing:1px;">Rounded Dimensions</td></tr>';
+      const params = [
+        ["Plate_Thickness", sol.thickness, rd.thickness],
+        ["Long_H2H",        sol.long,      rd.long],
+        ["Short_H2H",       sol.short,     rd.short],
+        ["Offset_H2H",      sol.offset,    rd.offset],
+        ["Hinge_Par",        sol.hinge_par, rd.hinge_par],
+      ];
+      for (const [name, raw, rounded] of params) {
+        const rawMM = (raw * 1000).toFixed(4);
+        const rndMM = (rounded * 1000).toFixed(1);
+        const changed = Math.abs(raw - rounded) > 1e-8;
+        const color = changed ? "#c8b88a" : "#666";
+        html += '<tr>' +
+          '<td style="padding:2px 4px;color:#888;">' + name + '</td>' +
+          '<td style="padding:2px 4px;text-align:right;color:#555;font-variant-numeric:tabular-nums;">' + rawMM + '</td>' +
+          '<td style="padding:2px 4px;text-align:right;color:' + color + ';font-variant-numeric:tabular-nums;font-weight:' + (changed ? '600' : '400') + ';">' + rndMM + '</td>' +
+          '</tr>';
+      }
+
+      html += '<tr><td colspan="3" style="border-top:1px solid #1f222b;padding:6px 4px 2px;font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#555;">Constraint Residuals</td></tr>';
+      const resKeys = Object.keys(res);
+      for (const key of resKeys) {
+        const val = res[key];
+        const absVal = Math.abs(val);
+        let color = "#44bb44";
+        if (absVal >= 0.1)       color = "#f87171";
+        else if (absVal >= 0.01) color = "#c8b88a";
+        else if (absVal >= 0.001) color = "#888";
+        html += '<tr>' +
+          '<td style="padding:1px 4px;color:#666;font-size:10px;" colspan="2">' + key.replace(/_/g, " ") + '</td>' +
+          '<td style="padding:1px 4px;text-align:right;color:' + color + ';font-variant-numeric:tabular-nums;font-size:10px;">' + val.toFixed(6) + ' mm</td>' +
+          '</tr>';
+      }
+
+      if (rd.depth_stow !== undefined) {
+        html += '<tr><td colspan="3" style="border-top:1px solid #1f222b;padding:6px 4px 2px;font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#555;">Achieved Dimensions</td></tr>';
+        const dimRows = [
+          ["Stow depth",    rd.depth_stow],
+          ["Deploy depth",  rd.depth_deploy],
+          ["Stow width",    rd.width_stow],
+          ["Deploy height", rd.height],
+        ];
+        for (const [label, val] of dimRows) {
+          if (val !== undefined) {
+            html += '<tr>' +
+              '<td style="padding:1px 4px;color:#555;" colspan="2">' + label + '</td>' +
+              '<td style="padding:1px 4px;text-align:right;color:#888;font-variant-numeric:tabular-nums;">' + (val * 1000).toFixed(2) + ' mm</td>' +
+              '</tr>';
+          }
+        }
+      }
+
+      tbody.innerHTML = html;
+    }
+
+    function generateCsv() {
+      if (!currentRounded) return null;
+      const rd = currentRounded;
+      const isFeasible = rd && !String(rd.status || "").startsWith("infeasible");
+      if (!isFeasible) return null;
+
+      const toMM = (v) => (v * 1000).toFixed(1);
+      const holeDiam = parseFloat(document.getElementById("csvHoleDiam").value) || 2.0;
+      const hingePerp = parseFloat(document.getElementById("csvHingePerp").value) || 2.0;
+      const plateThick = toMM(rd.thickness);
+
+      const rows = [
+        ["Name", "Unit", "Expression", "Value", "Comments", "Favorite"],
+        ["Hole_Diameter",   "mm", holeDiam.toFixed(2) + " mm",  holeDiam.toFixed(2),  "", "false"],
+        ["Plate_Thickness", "mm", plateThick + " mm",           plateThick,           "", "false"],
+        ["Member_Width",    "mm", "Plate_Thickness",            plateThick,           "", "false"],
+        ["Long_H2H",       "mm", toMM(rd.long) + " mm",        toMM(rd.long),        "", "false"],
+        ["Short_H2H",      "mm", toMM(rd.short) + " mm",       toMM(rd.short),       "", "false"],
+        ["Offset_H2H",     "mm", toMM(rd.offset) + " mm",      toMM(rd.offset),      "", "false"],
+        ["Hinge_Par",       "mm", toMM(rd.hinge_par) + " mm",   toMM(rd.hinge_par),   "", "false"],
+        ["Hinge_Perp",      "mm", hingePerp.toFixed(2) + " mm", hingePerp.toFixed(2), "", "false"],
+      ];
+      return rows.map(r => r.join(",")).join("\n");
+    }
+
+    document.getElementById("exportBtn").addEventListener("click", function() {
+      const csv = generateCsv();
+      if (!csv) return;
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "scissor_parameters.csv";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      const status = document.getElementById("exportStatus");
+      status.textContent = "\u2713 Exported scissor_parameters.csv (rounded values)";
+      status.style.opacity = 1;
+      setTimeout(() => { status.style.opacity = 0; }, 4000);
+    });
+
+    document.getElementById("hingePerSlider").addEventListener("input", function() {
+      document.getElementById("hingePerVal").textContent = parseFloat(this.value).toFixed(4);
+      rebuildFromUI();
+      updateCsvPreview();
+    });
+  </script>
+</body>
+</html>
