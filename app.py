@@ -15,11 +15,39 @@ from optimize import (
     sweep_offsets_and_thicknesses,
     make_interactive_plot,
 )
+from truss_bridge import run_fea_on_keypoints, get_material_presets, _NpEncoder
 
 app = Flask(__name__)
 
 # In-memory job store: job_id -> {status, progress, total, feasible, error}
 jobs = {}
+
+
+def _restore_jobs():
+    """Restore completed jobs from result files on disk."""
+    import glob
+    for html_path in glob.glob(os.path.join(app.root_path, 'results_*.html')):
+        basename = os.path.basename(html_path)
+        job_id = basename.replace('results_', '').replace('.html', '')
+        json_path = html_path.replace('.html', '.json')
+        if os.path.exists(json_path) and job_id not in jobs:
+            try:
+                with open(json_path) as f:
+                    data = json.load(f)
+                jobs[job_id] = {
+                    'status': 'done',
+                    'progress': len(data),
+                    'total': len(data),
+                    'feasible': len(data),
+                    'error': None,
+                    'html_path': html_path,
+                    'json_path': json_path,
+                }
+            except Exception:
+                pass
+
+
+_restore_jobs()
 
 FORM_HTML = """
 <!doctype html>
@@ -400,6 +428,51 @@ def results(job_id):
     if not job or job['status'] != 'done':
         return 'Results not ready', 404
     return send_file(job['html_path'])
+
+
+@app.route('/materials')
+def materials():
+    return jsonify(get_material_presets())
+
+
+@app.route('/run-fea', methods=['POST'])
+def run_fea():
+    """Run beam FEA on the current scissor geometry.
+
+    Expects JSON body with:
+      - keypoints: list of [x1,y1,z1, x2,y2,z2, w, h, layer]
+      - material: str (e.g. 'aluminum_6061')
+      - profile_type: str ('square', 'circle', 'rectangle')
+      - hollow: bool
+      - outer_dim_mm: float
+      - wall_mm: float
+      - P_load: float (N)
+      - load_dir: str ('X', 'Y', 'Z')
+    """
+    data = request.json
+    keypoints = data.get('keypoints')
+    if not keypoints or len(keypoints) < 2:
+        return jsonify({'error': 'Need at least 2 keypoints'}), 400
+
+    try:
+        result = run_fea_on_keypoints(
+            keypoints,
+            material=data.get('material', 'aluminum_6061'),
+            profile_type=data.get('profile_type', 'square'),
+            hollow=data.get('hollow', True),
+            outer_dim_mm=float(data.get('outer_dim_mm', 10)),
+            wall_mm=float(data.get('wall_mm', 1)),
+            P_load=float(data.get('P_load', 100)),
+            load_dir=data.get('load_dir', 'Y'),
+            bc=data.get('bc', {}),
+        )
+        return app.response_class(
+            response=json.dumps(result, cls=_NpEncoder),
+            status=200,
+            mimetype='application/json',
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

@@ -535,6 +535,11 @@ THREE_JS_VIEWER = r"""
     return { P1x, P1y, P2x, P2y, P3x, P3y, c, a: L * ca };
   }
 
+  // Collected member endpoints from buildScene (for FEA)
+  let _collectedMembers = [];
+  let _collectEnabled = false;
+  let _collectOffset = [0, 0, 0];  // group position offset for current cell
+
   function addTube(grp, a, b, matKey, radius) {
     const dir = new THREE.Vector3().subVectors(b, a);
     const len = dir.length();
@@ -545,6 +550,16 @@ THREE_JS_VIEWER = r"""
     mesh.position.addVectors(a, b).multiplyScalar(0.5);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
     grp.add(mesh);
+
+    if (_collectEnabled) {
+      const ox = _collectOffset[0], oy = _collectOffset[1], oz = _collectOffset[2];
+      _collectedMembers.push({
+        a: [a.x + ox, a.y + oy, a.z + oz],
+        b: [b.x + ox, b.y + oy, b.z + oz],
+        mat: matKey,
+        radius: radius
+      });
+    }
   }
 
   function addBall(grp, pos, matKey, radius) {
@@ -624,6 +639,8 @@ THREE_JS_VIEWER = r"""
   }
 
   function buildScene(L, O, alpha, nCells, T, hingePar, hingePer, S, h, showCells, longeronLen, showRefFrames, stowWidth) {
+    _collectedMembers = [];
+    _collectEnabled = true;
     const root = new THREE.Group();
     const { P1x, P1y, P2x, P2y, P3x, P3y, c, a } = compute2D(L, O, alpha);
 
@@ -649,6 +666,7 @@ THREE_JS_VIEWER = r"""
     for (let i = 0; i < cellsToShow; i++) {
       const g = new THREE.Group();
       g.position.set(0, -i * c, 0);
+      _collectOffset = [0, -i * c, 0];
 
       // ── RIGHT HALF (+X) ──
       const rOup = new THREE.Vector3(0, 0, +T);
@@ -656,10 +674,12 @@ THREE_JS_VIEWER = r"""
       const rP1 = new THREE.Vector3(P1x, P1y, +T);
       const rP2 = new THREE.Vector3(P2x, P2y, -T);
 
+      addTube(g, rOup, rOdn, MAT_ALU, Toff);  // rigid link: connect crossing point
       addTube(g, rOup, rP1, MAT_CARBON, T);
       addTube(g, rOdn, rP2, MAT_CARBON, T);
 
       const rP1_up = new THREE.Vector3(P1x, P1y, +2*T);
+      addTube(g, rP1, rP1_up, MAT_ALU, Toff);  // explicit rigid link
       addBall(g, rP1_up, MAT_ALU, Jrs);
       const rH2 = new THREE.Vector3(P1x, P1y, 2*T+hingePer);
       addTube(g, rP1_up, rH2, MAT_ALU, Toff);
@@ -682,8 +702,10 @@ THREE_JS_VIEWER = r"""
       if (showRefFrames) addRotatedRefFrame(g, rSH_par, refSize, T, planeAngle);
 
       const rSH_par_up = new THREE.Vector3(rSH_par.x, rSH_par.y, rSH_par.z + T);
+      addTube(g, rSH_par, rSH_par_up, MAT_ALU, Toff);  // rigid link
       const rShortDn = shortApex(rSH_par_up, planeAngle, halfBeta, S, -1);
       const rSH_par_up_up = new THREE.Vector3(rSH_par_up.x, rSH_par_up.y, rSH_par_up.z + T);
+      addTube(g, rSH_par_up, rSH_par_up_up, MAT_ALU, Toff);  // rigid link
       const rShortUp = shortApex(rSH_par_up_up, planeAngle, halfBeta, S, +1);
       addTube(g, rSH_par_up_up, rShortUp, MAT_CARBON_SHORT, Toff);
       addBall(g, rShortUp, MAT_CARBON_SHORT, Jrs);
@@ -694,6 +716,7 @@ THREE_JS_VIEWER = r"""
         addBall(g, rSH_par_up, MAT_CARBON_SHORT, Jrs);
         addBall(g, rShortDn, MAT_CARBON_SHORT, Jrs);
         const rShortDn_dn = new THREE.Vector3(rShortDn.x, rShortDn.y, rShortDn.z - T);
+        addTube(g, rShortDn, rShortDn_dn, MAT_ALU, Toff);  // rigid link
         addShortDnHinge(g, rShortDn_dn, planeAngle, hingePar, -hingePer, MAT_ALU_GREEN, Toff, Jrs);
         addBall(g, rShortDn_dn, MAT_ALU_GREEN, Jrs);
       }
@@ -702,7 +725,9 @@ THREE_JS_VIEWER = r"""
         const rP3 = new THREE.Vector3(P3x, P3y, +T);
         const rP3_up = new THREE.Vector3(P3x, P3y, +2*T);
         const rP2_up = new THREE.Vector3(P2x, P2y, +T);
+        addTube(g, rP2, rP2_up, MAT_ALU, Toff);  // rigid link P2→P2_up
         addTube(g, rP2_up, rP3, MAT_CARBON_OFF, Toff);
+        addTube(g, rP3, rP3_up, MAT_ALU, Toff);  // rigid link P3→P3_up
         const rH3up = new THREE.Vector3(P3x, P3y, 2*T + hingePer);
         addTube(g, rP3_up, rH3up, MAT_ALU, Toff);
         const rSH3 = new THREE.Vector3(
@@ -718,11 +743,13 @@ THREE_JS_VIEWER = r"""
         if (showRefFrames) addRefFrame(g, rH3up, refSize, T);
         if (showRefFrames) addRotatedRefFrame(g, rSH3_par, refSize, T, planeAngle);
         const rSH3_par_up = new THREE.Vector3(rSH3_par.x, rSH3_par.y, rSH3_par.z + T);
+        addTube(g, rSH3_par, rSH3_par_up, MAT_ALU, Toff);  // rigid link
         const rSh3Dn = shortApex(rSH3_par_up, planeAngle, halfBeta, S, -1);
         addTube(g, rSH3_par_up, rSh3Dn, MAT_CARBON_SHORT, Toff);
         addBall(g, rSH3_par_up, MAT_CARBON_SHORT, Jrs);
         addBall(g, rSh3Dn, MAT_CARBON_SHORT, Jrs);
         const rSh3Dn_up = new THREE.Vector3(rSh3Dn.x, rSh3Dn.y, rSh3Dn.z - T);
+        addTube(g, rSh3Dn, rSh3Dn_up, MAT_ALU, Toff);  // rigid link
         addShortDnHinge(g, rSh3Dn_up, planeAngle, hingePar, -hingePer, MAT_ALU_GREEN, Toff, Jrs);
         addBall(g, rSh3Dn_up, MAT_ALU_GREEN, Jrs);
         addBall(g, rP2_up, MAT_CARBON_OFF, Jrs);
@@ -775,6 +802,7 @@ THREE_JS_VIEWER = r"""
         addBall(g, rLongUp, MAT_LONGERON, Jrs);
 
         const rLongDn_ref = new THREE.Vector3(rShortDn.x, rShortDn.y, rShortDn.z +2*T);
+        addTube(g, rShortDn, rLongDn_ref, MAT_ALU, Toff);  // rigid link
         const rLongDn = new THREE.Vector3(
           rShortDn.x + Math.cos(longeron_halfAngle)*longeron_length,
           rShortDn.y - Math.sin(longeron_halfAngle)*longeron_length,
@@ -817,8 +845,10 @@ THREE_JS_VIEWER = r"""
       if (showRefFrames) addRotatedRefFrame(g, lSH_par, refSize, T, -leftPlaneAngle);
 
       const lSH_par_up = new THREE.Vector3(lSH_par.x, lSH_par.y, lSH_par.z + T);
+      addTube(g, lSH_par, lSH_par_up, MAT_ALU, Toff);  // rigid link
       const lShortDn = shortApex(lSH_par_up, leftPlaneAngle, halfBeta, S, -1);
       const lSH_par_up_up = new THREE.Vector3(lSH_par_up.x, lSH_par_up.y, lSH_par_up.z + T);
+      addTube(g, lSH_par_up, lSH_par_up_up, MAT_ALU, Toff);  // rigid link
       const lShortUp = shortApex(lSH_par_up_up, leftPlaneAngle, halfBeta, S, +1);
       addTube(g, lSH_par_up_up, lShortUp, MAT_CARBON_SHORT, Toff);
       addBall(g, lShortUp, MAT_CARBON_SHORT, Jrs);
@@ -828,6 +858,7 @@ THREE_JS_VIEWER = r"""
         addTube(g, lSH_par_up, lShortDn, MAT_CARBON_SHORT, Toff);
         addBall(g, lSH_par_up, MAT_CARBON_SHORT, Jrs);
         const lShortDn_dn = new THREE.Vector3(lShortDn.x, lShortDn.y, lShortDn.z - T);
+        addTube(g, lShortDn, lShortDn_dn, MAT_ALU, Toff);  // rigid link
         addShortDnHinge(g, lShortDn_dn, leftPlaneAngle, hingePar, hingePer, MAT_ALU_GREEN, Toff, Jrs);
         addBall(g, lShortDn_dn, MAT_ALU_GREEN, Jrs);
         addBall(g, lShortDn, MAT_CARBON_SHORT, Jrs);
@@ -836,9 +867,11 @@ THREE_JS_VIEWER = r"""
       if (i === cellsToShow - 1) {
         const lP3 = new THREE.Vector3(-P3x, P3y, -T);
         const lP2_dn = new THREE.Vector3(-P2x, P2y, -T);
+        addTube(g, lP2, lP2_dn, MAT_ALU, Toff);  // rigid link
         addBall(g, lP2_dn, MAT_CARBON_OFF, Jrs);
         addTube(g, lP2_dn, lP3, MAT_CARBON_OFF, Toff);
         const lP3_up = new THREE.Vector3(-P3x, P3y, +2*T);
+        addTube(g, lP3, lP3_up, MAT_ALU, Toff);  // rigid link
         addTube(g, lP3_up, lP3, MAT_ALU, Toff);
         const lH3up = new THREE.Vector3(-P3x, P3y, 2*T + hingePer);
         addTube(g, lP3_up, lH3up, MAT_ALU, Toff);
@@ -855,11 +888,13 @@ THREE_JS_VIEWER = r"""
         if (showRefFrames) addRefFrame(g, lH3up, refSize, T);
         if (showRefFrames) addRotatedRefFrame(g, lSH3_par, refSize, T, -leftPlaneAngle);
         const lSH3_par_up = new THREE.Vector3(lSH3_par.x, lSH3_par.y, lSH3_par.z + T);
+        addTube(g, lSH3_par, lSH3_par_up, MAT_ALU, Toff);  // rigid link
         const lSh3Dn = shortApex(lSH3_par_up, leftPlaneAngle, halfBeta, S, -1);
         addTube(g, lSH3_par_up, lSh3Dn, MAT_CARBON_SHORT, Toff);
         addBall(g, lSH3_par_up, MAT_CARBON_SHORT, Jrs);
         addBall(g, lSh3Dn, MAT_CARBON_SHORT, Jrs);
         const lSh3Dn_up = new THREE.Vector3(lSh3Dn.x, lSh3Dn.y, lSh3Dn.z - T);
+        addTube(g, lSh3Dn, lSh3Dn_up, MAT_ALU, Toff);  // rigid link
         addShortDnHinge(g, lSh3Dn_up, leftPlaneAngle, hingePar, hingePer, MAT_ALU_GREEN, Toff, Jrs);
         addBall(g, lSh3Dn_up, MAT_ALU_GREEN, Jrs);
         addBall(g, lP3_up, MAT_ALU, Jrs);
@@ -909,6 +944,7 @@ THREE_JS_VIEWER = r"""
         addBall(g, lLongUp, MAT_LONGERON, Jrs);
 
         const lLongDn_ref = new THREE.Vector3(lShortDn.x, lShortDn.y, lShortDn.z +2*T);
+        addTube(g, lShortDn, lLongDn_ref, MAT_ALU, Toff);  // rigid link
         const lLongDn = new THREE.Vector3(
           lShortDn.x - Math.cos(longeron_halfAngle_l)*longeron_length_l,
           lShortDn.y - Math.sin(longeron_halfAngle_l)*longeron_length_l,
@@ -921,6 +957,7 @@ THREE_JS_VIEWER = r"""
 
       root.add(g);
     }
+    _collectOffset = [0, 0, 0];  // reset for non-cell members (struts, etc.)
 
     // ── Solar panel surface (translucent blue, on top, stow width x deployed depth) ──
     const panelDepth = c * cellsToShow;
@@ -1021,7 +1058,8 @@ THREE_JS_VIEWER = r"""
     const strutBot = new THREE.Vector3(0, P1y, 0);
     addTube(root, strutTop, strutBot, MAT_ALU, T * 1.5);
 
-    return { group: root, c, theta, halfBeta, cellsToShow };
+    _collectEnabled = false;
+    return { group: root, c, theta, halfBeta, cellsToShow, members: _collectedMembers.slice() };
   }
 
   // ── Viewer state ──
@@ -1103,13 +1141,15 @@ THREE_JS_VIEWER = r"""
     const alpha = (sol.alpha_stow || 0) + alphaFrac * ((sol.alpha_deploy || 1) - (sol.alpha_stow || 0));
     const deployC = compute2D(sol.long, sol.offset, sol.alpha_deploy || 1).c;
     const longeronLen = 0.5 * deployC;
-    const { group, c } = buildScene(
+    const bld = buildScene(
       sol.long, sol.offset, alpha, sol.n_cells,
       thickness, sol.hinge_par, hingePer,
       sol.short, sol.hinge_par, showCells, longeronLen, showRefFrames,
       sol.width_actual || 0
     );
+    const { group, c } = bld;
     s.linkage = group;
+    s.sceneMembers = bld.members;  // store for FEA
     s.scene.add(group);
     s.camera.userData.tgt = new THREE.Vector3(0, -c * Math.max(0, Math.min(showCells, sol.n_cells) - 1) / 2, 0);
   }
@@ -1419,6 +1459,45 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       outline: none;
       border-color: #c8b88a;
     }}
+    .fea-field {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }}
+    .fea-field label {{
+      font-size: 10px;
+      color: #888;
+    }}
+    .fea-input {{
+      width: 110px;
+      background: #090b10;
+      border: 1px solid #282b36;
+      border-radius: 3px;
+      color: #e74c3c;
+      font-size: 10px;
+      font-family: inherit;
+      padding: 3px 6px;
+      text-align: right;
+    }}
+    .fea-input:focus {{ outline: none; border-color: #e74c3c; }}
+    select.fea-input {{ text-align: left; cursor: pointer; }}
+    .fea-result-header {{
+      font-size: 8px;
+      color: #e74c3c;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #2a1515;
+    }}
+    #feaResultsTable td {{
+      padding: 2px 4px;
+      border-bottom: 1px solid #1a1a1a;
+    }}
+    #feaResultsTable td:first-child {{ color: #888; }}
+    #feaResultsTable td:last-child {{ color: #ddd; text-align: right; font-variant-numeric: tabular-nums; }}
     #csvTable th {{
       border-bottom: 1px solid #1f222b;
       font-weight: 600;
@@ -1685,6 +1764,112 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
         </div>
         <div id="kpExportStatus" style="font-size:9px;color:#44bb44;margin-top:6px;min-height:14px;transition:opacity 0.3s;"></div>
       </div>
+      <div class="section" id="feaSection">
+        <h3>Beam FEA</h3>
+        <div id="feaConfigPanel">
+          <div class="fea-field">
+            <label>Material</label>
+            <select id="feaMaterial" class="fea-input">
+              <option value="aluminum_6061">Al 6061-T6</option>
+              <option value="stainless_304">SS 304</option>
+              <option value="carbon_fiber">CFRP</option>
+            </select>
+          </div>
+          <div class="fea-field">
+            <label>Profile</label>
+            <select id="feaProfile" class="fea-input">
+              <option value="square">Square</option>
+              <option value="circle">Circle</option>
+              <option value="rectangle">Rectangle</option>
+            </select>
+          </div>
+          <div class="fea-field">
+            <label>Hollow</label>
+            <input type="checkbox" id="feaHollow" checked style="accent-color:#e74c3c;" />
+          </div>
+          <div class="fea-field">
+            <label>Outer dim (mm)</label>
+            <input type="number" id="feaDim" class="fea-input" value="10" step="0.5" min="1" />
+          </div>
+          <div class="fea-field">
+            <label>Wall (mm)</label>
+            <input type="number" id="feaWall" class="fea-input" value="1" step="0.1" min="0.1" />
+          </div>
+          <div class="fea-field">
+            <label>Tip load (N)</label>
+            <input type="number" id="feaLoad" class="fea-input" value="100" step="10" min="0.1" />
+          </div>
+          <div class="fea-field">
+            <label>Load dir</label>
+            <select id="feaLoadDir" class="fea-input">
+              <option value="X">X (lateral)</option>
+              <option value="Y" selected>Y (along deploy)</option>
+              <option value="Z">Z (out of plane)</option>
+            </select>
+          </div>
+          <div style="margin-top:6px;padding-top:6px;border-top:1px solid #1c1e28;">
+            <div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:2px;margin-bottom:6px;">Boundary Conditions</div>
+            <div class="fea-field">
+              <label>Fix</label>
+              <select id="feaFixMode" class="fea-input">
+                <option value="base">Base (cell 0)</option>
+                <option value="tip">Tip (last cell)</option>
+                <option value="both">Both ends</option>
+                <option value="base_wide">Base (2 cells)</option>
+                <option value="custom">Custom Y range</option>
+              </select>
+            </div>
+            <div id="feaFixCustomRow" style="display:none;">
+              <div class="fea-field">
+                <label>Fix Y from</label>
+                <input type="number" id="feaFixYMin" class="fea-input" value="" step="0.1" placeholder="min" />
+              </div>
+              <div class="fea-field">
+                <label>Fix Y to</label>
+                <input type="number" id="feaFixYMax" class="fea-input" value="" step="0.1" placeholder="max" />
+              </div>
+            </div>
+            <div class="fea-field">
+              <label>Load at</label>
+              <select id="feaLoadAt" class="fea-input">
+                <option value="auto">Opposite end</option>
+                <option value="base">Base (cell 0)</option>
+                <option value="tip">Tip (last cell)</option>
+                <option value="mid">Mid-span</option>
+              </select>
+            </div>
+            <div class="fea-field">
+              <label>Fix DOFs</label>
+              <select id="feaFixDofs" class="fea-input">
+                <option value="all">All 6 (rigid)</option>
+                <option value="pin">XYZ only (pin)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <button id="feaRunBtn" disabled style="width:100%;margin-top:8px;padding:10px 0;background:linear-gradient(135deg,#e74c3c,#c0392b);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;transition:opacity 0.2s;">Run FEA</button>
+        <div id="feaStatus" style="font-size:9px;color:#aaa;margin-top:6px;min-height:14px;"></div>
+        <div id="feaResults" style="display:none;margin-top:10px;">
+          <div class="fea-result-header">Results</div>
+          <table id="feaResultsTable" style="width:100%;border-collapse:collapse;font-size:10px;">
+            <tbody id="feaResultsBody"></tbody>
+          </table>
+          <div id="feaFreqChart" style="margin-top:8px;height:120px;"></div>
+          <div style="margin-top:6px;">
+            <div class="fea-field">
+              <label>Show mode</label>
+              <select id="feaModeSelect" class="fea-input" style="width:80px;">
+                <option value="-1">None</option>
+              </select>
+            </div>
+            <div class="fea-field">
+              <label>Scale</label>
+              <input type="range" id="feaModeScale" min="0.1" max="5" step="0.1" value="1" style="width:80px;accent-color:#e74c3c;" />
+              <span id="feaModeScaleVal" style="font-size:9px;color:#888;margin-left:4px;">1.0x</span>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="section">
         <h3>Full JSON output</h3>
         <pre id="jsonPanel">Click a point to populate.</pre>
@@ -1896,6 +2081,7 @@ def make_interactive_plot(results, out_html="scissor_sweep.html",
       document.getElementById("glbAnimBtn").disabled = false;
       document.getElementById("exportPetBtn").disabled = false;
       document.getElementById("exportDartBtn").disabled = false;
+      document.getElementById("feaRunBtn").disabled = false;
 
       rebuildFromUI();
       updateCsvPreview();
@@ -2633,6 +2819,297 @@ print(f"Done! {{n_frames}} frames imported. Press Space to play.")
       status.textContent = "\\u2713 Exported dart_keypoints.csv (" + kps.length + " members)";
       status.style.opacity = 1;
       setTimeout(() => {{ status.style.opacity = 0; }}, 4000);
+    }});
+
+    // ── FEA Integration ──
+    const feaRunBtn = document.getElementById("feaRunBtn");
+    const feaStatus = document.getElementById("feaStatus");
+    const feaResults = document.getElementById("feaResults");
+    const feaResultsBody = document.getElementById("feaResultsBody");
+    const feaFreqChart = document.getElementById("feaFreqChart");
+    const feaModeSelect = document.getElementById("feaModeSelect");
+    const feaModeScale = document.getElementById("feaModeScale");
+    const feaModeScaleVal = document.getElementById("feaModeScaleVal");
+    let feaData = null;  // stores last FEA result
+    let feaOverlayGroup = null;  // THREE.js group for FEA visualization
+    let feaAnimFrame = null;
+
+    function getCurrentKeypoints() {{
+      // Extract member geometry directly from the 3D viewer's buildScene output
+      // This ensures FEA geometry matches exactly what the user sees
+      const state = window.getViewerState ? window.getViewerState() : null;
+      if (!state || !state.sceneMembers || state.sceneMembers.length === 0) return null;
+
+      // Convert collected members to keypoint format [x1,y1,z1, x2,y2,z2, w,h, layer]
+      // Coordinates are already in viewer space (Three.js coords)
+      // Tag members: structural get beam elements, hinge members collapse
+      // into rigid connections (endpoints merged, no beam element created)
+      const STRUCTURAL_MATS = {{
+        'carbonFiber': 1,       // long arms
+        'carbonFiberOffset': 2, // offset members
+        'carbonShort': 3,       // short members
+        'longeron': 6,          // longerons
+      }};
+      const HINGE_MATS = ['aluminum', 'aluminumGreen', 'aluminumDark'];
+
+      return state.sceneMembers
+        .filter(function(m) {{
+          return STRUCTURAL_MATS[m.mat] !== undefined || HINGE_MATS.indexOf(m.mat) >= 0;
+        }})
+        .map(function(m) {{
+          const isHinge = HINGE_MATS.indexOf(m.mat) >= 0;
+          return [
+            m.a[0], m.a[1], m.a[2],
+            m.b[0], m.b[1], m.b[2],
+            m.radius * 2, m.radius * 2,
+            isHinge ? -1 : STRUCTURAL_MATS[m.mat]  // -1 = hinge (rigid connection)
+          ];
+        }});
+    }}
+
+    function clearFeaOverlay() {{
+      if (feaAnimFrame) {{ cancelAnimationFrame(feaAnimFrame); feaAnimFrame = null; }}
+      const state = window.getViewerState ? window.getViewerState() : null;
+      if (state && state.scene && feaOverlayGroup) {{
+        state.scene.remove(feaOverlayGroup);
+        feaOverlayGroup = null;
+      }}
+    }}
+
+    function showLoadArrows(data) {{
+      const state = window.getViewerState ? window.getViewerState() : null;
+      if (!state || !state.scene) return;
+      clearFeaOverlay();
+      feaOverlayGroup = new THREE.Group();
+      feaOverlayGroup.name = "feaOverlay";
+
+      // Fixed nodes: small red cubes
+      if (data.fixed_nodes) {{
+        const fixGeo = new THREE.BoxGeometry(0.03, 0.03, 0.03);
+        const fixMat = new THREE.MeshBasicMaterial({{ color: 0xff4444 }});
+        data.fixed_nodes.forEach(function(p) {{
+          const m = new THREE.Mesh(fixGeo, fixMat);
+          m.position.set(p[0], p[1], p[2]);
+          feaOverlayGroup.add(m);
+        }});
+      }}
+
+      // Load arrows at tip nodes
+      const arrowLen = 0.3;
+      if (data.load_arrows) {{
+        data.load_arrows.forEach(function(a) {{
+          const origin = new THREE.Vector3(a.pos[0], a.pos[1], a.pos[2]);
+          const dir = new THREE.Vector3(a.dir[0], a.dir[1], a.dir[2]).normalize();
+          const arrow = new THREE.ArrowHelper(dir, origin, arrowLen, 0xffcc00, 0.08, 0.04);
+          feaOverlayGroup.add(arrow);
+        }});
+      }}
+
+      state.scene.add(feaOverlayGroup);
+    }}
+
+    function showModeShape(modeIdx, scale) {{
+      const state = window.getViewerState ? window.getViewerState() : null;
+      if (!state || !state.scene || !feaData) return;
+      clearFeaOverlay();
+      if (modeIdx < 0 || modeIdx >= feaData.mode_shapes.length) {{
+        // Just show load arrows
+        showLoadArrows(feaData);
+        return;
+      }}
+
+      feaOverlayGroup = new THREE.Group();
+      feaOverlayGroup.name = "feaOverlay";
+
+      const nodes = feaData.nodes;
+      const members = feaData.members;
+      const shape = feaData.mode_shapes[modeIdx];
+
+      // Animate mode shape
+      let phase = 0;
+      const lineMat = new THREE.LineBasicMaterial({{ color: 0xff3333, linewidth: 2 }});
+
+      function animateMode() {{
+        // Remove old lines
+        while (feaOverlayGroup.children.length > 0) {{
+          feaOverlayGroup.remove(feaOverlayGroup.children[0]);
+        }}
+
+        phase += 0.04;
+        const amp = Math.sin(phase) * scale;
+
+        // Draw deformed members
+        members.forEach(function(mem) {{
+          const n0 = nodes[mem[0]];
+          const n1 = nodes[mem[1]];
+          const d0 = shape[mem[0]];
+          const d1 = shape[mem[1]];
+
+          const p0 = new THREE.Vector3(
+            n0[0] + d0[0] * amp,
+            n0[1] + d0[1] * amp,
+            n0[2] + d0[2] * amp
+          );
+          const p1 = new THREE.Vector3(
+            n1[0] + d1[0] * amp,
+            n1[1] + d1[1] * amp,
+            n1[2] + d1[2] * amp
+          );
+
+          const geo = new THREE.BufferGeometry().setFromPoints([p0, p1]);
+          feaOverlayGroup.add(new THREE.Line(geo, lineMat));
+        }});
+
+        feaAnimFrame = requestAnimationFrame(animateMode);
+      }}
+
+      state.scene.add(feaOverlayGroup);
+      animateMode();
+    }}
+
+    feaModeSelect.addEventListener("change", function() {{
+      const idx = parseInt(this.value);
+      const scale = parseFloat(feaModeScale.value);
+      showModeShape(idx, scale);
+    }});
+
+    feaModeScale.addEventListener("input", function() {{
+      feaModeScaleVal.textContent = parseFloat(this.value).toFixed(1) + "x";
+      const idx = parseInt(feaModeSelect.value);
+      if (idx >= 0 && feaData) {{
+        clearFeaOverlay();
+        showModeShape(idx, parseFloat(this.value));
+      }}
+    }});
+
+    function renderFeaResults(data) {{
+      if (data.error) {{
+        feaStatus.textContent = "Error: " + data.error;
+        feaStatus.style.color = "#e74c3c";
+        feaResults.style.display = "none";
+        return;
+      }}
+
+      feaData = data;
+      feaResults.style.display = "block";
+
+      const compWarn = (data.n_components && data.n_components > 1)
+        ? " \\u26a0 " + data.n_components + " disconnected parts!"
+        : " (connected)";
+      const rows = [
+        ["Nodes / Members", data.n_nodes + " / " + data.n_members + compWarn],
+        ["Material", data.material_label],
+        ["Mass", data.mass_kg.toFixed(3) + " kg"],
+        ["f1", data.frequencies[0] ? data.frequencies[0].toFixed(4) + " Hz" : "N/A"],
+        ["Max stress", data.sig_max_mpa.toFixed(1) + " MPa"],
+        ["k_X", data.stiffness.X.toFixed(1) + " N/m"],
+        ["k_Y", data.stiffness.Y.toFixed(1) + " N/m"],
+        ["k_Z", data.stiffness.Z.toFixed(1) + " N/m"],
+        ["Fixed / Tip nodes", (data.n_fixed_nodes || "?") + " / " + (data.n_tip_nodes || "?")],
+      ];
+      feaResultsBody.innerHTML = rows.map(function(r) {{
+        return '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>';
+      }}).join("");
+
+      // Frequency bar chart
+      if (data.frequencies && data.frequencies.length > 0) {{
+        const fLabels = data.frequencies.map(function(_, i) {{ return "f" + (i+1); }});
+        Plotly.newPlot(feaFreqChart, [{{
+          x: fLabels,
+          y: data.frequencies,
+          type: "bar",
+          marker: {{ color: "#e74c3c" }},
+          hovertemplate: "%{{x}}: %{{y:.4f}} Hz<extra></extra>"
+        }}], {{
+          margin: {{ t: 4, b: 24, l: 40, r: 8 }},
+          paper_bgcolor: "transparent",
+          plot_bgcolor: "transparent",
+          xaxis: {{ color: "#555", tickfont: {{ size: 9 }} }},
+          yaxis: {{ color: "#555", tickfont: {{ size: 9 }}, title: {{ text: "Hz", font: {{ size: 9, color: "#555" }} }} }},
+          height: 120,
+        }}, {{ displayModeBar: false, responsive: true }});
+      }}
+
+      // Populate mode selector
+      feaModeSelect.innerHTML = '<option value="-1">Load arrows</option>';
+      data.frequencies.forEach(function(f, i) {{
+        const opt = document.createElement("option");
+        opt.value = i;
+        opt.textContent = "Mode " + (i+1) + " (" + f.toFixed(2) + " Hz)";
+        feaModeSelect.appendChild(opt);
+      }});
+
+      // Show load arrows by default
+      showLoadArrows(data);
+    }}
+
+    // Toggle custom Y range inputs
+    document.getElementById("feaFixMode").addEventListener("change", function() {{
+      document.getElementById("feaFixCustomRow").style.display = this.value === "custom" ? "block" : "none";
+    }});
+
+    feaRunBtn.addEventListener("click", async function() {{
+      if (!currentSol) return;
+
+      // Extract current keypoints from the viewer
+      const kps = getCurrentKeypoints();
+      if (!kps || kps.length < 2) {{
+        feaStatus.textContent = "Need at least 2 members. Adjust cells/angle.";
+        feaStatus.style.color = "#e74c3c";
+        return;
+      }}
+
+      feaRunBtn.disabled = true;
+      feaStatus.textContent = "Running FEA on " + kps.length + " members...";
+      feaStatus.style.color = "#aaa";
+      feaResults.style.display = "none";
+      clearFeaOverlay();
+
+      // Build boundary condition config
+      const fixMode = document.getElementById("feaFixMode").value;
+      const bcConfig = {{
+        fix_mode: fixMode,
+        load_at: document.getElementById("feaLoadAt").value,
+        fix_dofs: document.getElementById("feaFixDofs").value,
+      }};
+      if (fixMode === "custom") {{
+        const ymin = document.getElementById("feaFixYMin").value;
+        const ymax = document.getElementById("feaFixYMax").value;
+        if (ymin !== "") bcConfig.fix_y_min = parseFloat(ymin);
+        if (ymax !== "") bcConfig.fix_y_max = parseFloat(ymax);
+      }}
+
+      try {{
+        const resp = await fetch("/run-fea", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            keypoints: kps,
+            material: document.getElementById("feaMaterial").value,
+            profile_type: document.getElementById("feaProfile").value,
+            hollow: document.getElementById("feaHollow").checked,
+            outer_dim_mm: parseFloat(document.getElementById("feaDim").value),
+            wall_mm: parseFloat(document.getElementById("feaWall").value),
+            P_load: parseFloat(document.getElementById("feaLoad").value),
+            load_dir: document.getElementById("feaLoadDir").value,
+            bc: bcConfig,
+          }})
+        }});
+        const data = await resp.json();
+        if (resp.ok) {{
+          feaStatus.textContent = "\\u2713 FEA complete (" + data.n_nodes + " nodes, " + data.n_members + " members)";
+          feaStatus.style.color = "#2ecc71";
+          renderFeaResults(data);
+        }} else {{
+          feaStatus.textContent = "Error: " + (data.error || "unknown");
+          feaStatus.style.color = "#e74c3c";
+        }}
+      }} catch (err) {{
+        feaStatus.textContent = "Request failed: " + err.message;
+        feaStatus.style.color = "#e74c3c";
+      }}
+
+      feaRunBtn.disabled = false;
     }});
   </script>
 </body>
